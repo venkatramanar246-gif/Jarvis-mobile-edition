@@ -1,47 +1,68 @@
-Carefully inspect the uploaded HTML file and its related CSS/JavaScript files.
+IMPORTANT: The previous repair did not work. Do not just explain the problem. Actually inspect the uploaded HTML and repair the broken functionality.
+
+STRICT RULES:
+- Do NOT redesign the UI.
+- Do NOT change the visual design.
+- Do NOT change colors, fonts, layout, text, spacing, animations, or existing features.
+- Do NOT remove any existing code or functionality.
+- Do NOT add unnecessary features.
+- Do NOT rewrite the entire project.
+- Make ONLY the minimum code changes required to make the existing controls actually work.
+
+FIRST, inspect the COMPLETE HTML code carefully.
+
+Then verify every existing interactive element, including:
+1. EXECUTE button
+2. Microphone / Voice button
+3. Camera / Image upload button
+4. Clear Memory button
+5. Message input
+6. Hidden image input
+7. Chat area
+8. All existing JavaScript event listeners
+9. All element IDs and selectors
+10. All JavaScript function references
 
 IMPORTANT:
-Do NOT redesign, rewrite, replace, remove, or modify any existing working code or functionality.
+The HTML contains external files such as:
+- style.css
+- script.js
 
-Preserve the J.A.R.V.I.S futuristic black-and-cyan design EXACTLY as it is.
+Check whether the functionality depends on those files.
 
-Do NOT change:
-- Layout
-- Colors
-- Fonts
-- Text
-- Spacing
-- Animations
-- Visual effects
-- UI structure
-- Existing working features
-- Button appearance
-- IDs that are already correct
+If the uploaded project contains script.js, inspect and repair script.js where the actual errors are located.
 
-ONLY fix functionality that is actually broken.
+If script.js is missing but the HTML depends on it, DO NOT simply say "script.js is missing." Make the smallest possible repair that allows the existing controls to work while preserving the exact existing UI and behavior.
 
-Make sure all existing controls work correctly, including:
-- EXECUTE / SEND button
-- Voice / Microphone button
-- Camera / Image button
-- Clear Memory button
-- Image upload
-- Chat input
-- Tabs
-- Navigation controls
-- All existing buttons and interactive elements
+Check for common actual errors such as:
+- Incorrect element IDs
+- JavaScript looking for IDs that do not exist
+- Event listeners attached to the wrong elements
+- Functions with incorrect names
+- JavaScript running before the DOM elements exist
+- Missing event handlers
+- Incorrect button selectors
+- Incorrect file-input handling
+- Incorrect microphone event handling
+- Incorrect camera/image-upload event handling
+- JavaScript syntax errors
+- Null/undefined element references
+- Broken script loading
+- Incorrect references between HTML and JavaScript
+- Buttons being blocked by another element
+- Form submission accidentally reloading the page
 
-Check that every button ID, event listener, function call, and JavaScript handler is correctly connected.
+Do NOT change working code just because it could be improved.
 
-If an HTML element, ID, event handler, or function is already correct and working, leave it completely unchanged.
+After identifying the actual errors, apply ONLY the minimum necessary fixes.
 
-Do not add unnecessary features.
-Do not remove any existing features.
-Do not change the UI design.
-Do not change the wording or appearance.
+CRITICAL:
+Do not give me a mockup.
+Do not give me an explanation instead of the repaired code.
+Do not give me partial code.
 
-Use the minimum possible code changes required to make the broken functionality work.
+RETURN THE COMPLETE WORKING PROJECT CODE, including the repaired HTML and, if required, the repaired JavaScript.
 
-After fixing everything, return the COMPLETE WORKING HTML CODE, including all required CSS and JavaScript if they are part of the uploaded project.
+The final result must keep the original J.A.R.V.I.S futuristic black/cyan interface EXACTLY the same.
 
-The final result must look and behave exactly like the original J.A.R.V.I.S interface, except that the previously broken functions should now work correctly.
+ONLY repair what is broken.
