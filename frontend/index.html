@@ -1,68 +1,72 @@
-IMPORTANT: The previous repair did not work. Do not just explain the problem. Actually inspect the uploaded HTML and repair the broken functionality.
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>J.A.R.V.I.S</title>
+  <link rel="stylesheet" href="style.css">
+</head>
 
-STRICT RULES:
-- Do NOT redesign the UI.
-- Do NOT change the visual design.
-- Do NOT change colors, fonts, layout, text, spacing, animations, or existing features.
-- Do NOT remove any existing code or functionality.
-- Do NOT add unnecessary features.
-- Do NOT rewrite the entire project.
-- Make ONLY the minimum code changes required to make the existing controls actually work.
+<body>
 
-FIRST, inspect the COMPLETE HTML code carefully.
+  <header>
+    <h1>J.A.R.V.I.S</h1>
+    <p>PERSONAL AI ASSISTANT</p>
+  </header>
 
-Then verify every existing interactive element, including:
-1. EXECUTE button
-2. Microphone / Voice button
-3. Camera / Image upload button
-4. Clear Memory button
-5. Message input
-6. Hidden image input
-7. Chat area
-8. All existing JavaScript event listeners
-9. All element IDs and selectors
-10. All JavaScript function references
+  <div class="core">
+    <div class="ring r1"></div>
+    <div class="ring r2"></div>
+    <div class="center"></div>
+  </div>
 
-IMPORTANT:
-The HTML contains external files such as:
-- style.css
-- script.js
+  <p class="core-text">SYSTEM READY</p>
 
-Check whether the functionality depends on those files.
+  <div class="status">
+    <h2>SYSTEM DIAGNOSTICS</h2>
 
-If the uploaded project contains script.js, inspect and repair script.js where the actual errors are located.
+    <div class="row">
+      <span>AI ENGINE</span>
+      <b class="on">● OPERATIONAL</b>
+    </div>
 
-If script.js is missing but the HTML depends on it, DO NOT simply say "script.js is missing." Make the smallest possible repair that allows the existing controls to work while preserving the exact existing UI and behavior.
+    <div class="row">
+      <span>CONNECTION</span>
+      <b class="on">● ONLINE</b>
+    </div>
 
-Check for common actual errors such as:
-- Incorrect element IDs
-- JavaScript looking for IDs that do not exist
-- Event listeners attached to the wrong elements
-- Functions with incorrect names
-- JavaScript running before the DOM elements exist
-- Missing event handlers
-- Incorrect button selectors
-- Incorrect file-input handling
-- Incorrect microphone event handling
-- Incorrect camera/image-upload event handling
-- JavaScript syntax errors
-- Null/undefined element references
-- Broken script loading
-- Incorrect references between HTML and JavaScript
-- Buttons being blocked by another element
-- Form submission accidentally reloading the page
+    <div class="row">
+      <span>VOICE INTERFACE</span>
+      <b class="on">● READY</b>
+    </div>
 
-Do NOT change working code just because it could be improved.
+    <div class="row">
+      <span>LONG-TERM MEMORY</span>
+      <b class="on">● ACTIVE</b>
+    </div>
+  </div>
 
-After identifying the actual errors, apply ONLY the minimum necessary fixes.
+  <div class="chat" id="chat"></div>
 
-CRITICAL:
-Do not give me a mockup.
-Do not give me an explanation instead of the repaired code.
-Do not give me partial code.
+  <div class="input-area">
+    <input id="msg" placeholder="Enter a command for J.A.R.V.I.S...">
 
-RETURN THE COMPLETE WORKING PROJECT CODE, including the repaired HTML and, if required, the repaired JavaScript.
+    <button id="send">EXECUTE</button>
 
-The final result must keep the original J.A.R.V.I.S futuristic black/cyan interface EXACTLY the same.
+    <button id="mic-btn" aria-label="Activate voice input">🎙️</button>
 
-ONLY repair what is broken.
+    <button id="cam-btn" aria-label="Analyze image">📷</button>
+
+    <button id="clear-btn">CLEAR MEMORY</button>
+
+    <input
+      id="img-input"
+      type="file"
+      accept="image/*"
+      style="display:none"
+    >
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
