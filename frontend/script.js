@@ -1277,7 +1277,8 @@
     );
   }
 })();
-```0  window.handleTools = handleTools;
+```0 
+window.handleTools = handleTools;
   window.jarvisRun = runCommand;
   window.jarvisSpeak = speak;
 
