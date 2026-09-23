@@ -1,15 +1,11 @@
 "use strict";
 
-/* =========================================================
-   J.A.R.V.I.S. - SCRIPT.JS
-   PART 1 OF 2
-   ========================================================= */
-
 (function () {
 
-  /* =========================
-     ELEMENTS
-     ========================= */
+  /* =====================================================
+     J.A.R.V.I.S. SCRIPT.JS
+     PART 1 / 2
+     ===================================================== */
 
   const msg = document.getElementById("msg");
   const send = document.getElementById("send");
@@ -20,21 +16,19 @@
   const chat = document.getElementById("chat");
 
   if (!msg || !send || !chat) {
-    console.error("JARVIS: Required HTML elements not found.");
+    console.error("JARVIS: HTML elements not found.");
     return;
   }
 
   let recognition = null;
-  let isListening = false;
-  let isBusy = false;
-
-  const timers = [];
+  let listening = false;
+  let busy = false;
 
   const MEMORY_KEY = "JARVIS_MEMORY";
 
-  /* =========================
-     BASIC HELPERS
-     ========================= */
+  /* =====================================================
+     HELPERS
+     ===================================================== */
 
   function clean(text) {
     return String(text || "")
@@ -55,19 +49,31 @@
       .replace(/'/g, "&#039;");
   }
 
+  /*
+     THIS MAKES USER + JARVIS TEXT APPEAR
+     INSIDE THE EXISTING CHAT BOX.
+  */
+
+  function showChat() {
+    chat.style.display = "block";
+  }
+
   function addChat(sender, text) {
+
+    showChat();
 
     const box = document.createElement("div");
 
-    box.style.margin = "10px 0";
-    box.style.padding = "8px 10px";
-    box.style.wordBreak = "break-word";
+    box.className = "jarvis-message";
 
-    box.innerHTML =
-      "<strong>" +
-      escapeHTML(sender) +
-      "</strong><br>" +
-      escapeHTML(text);
+    const title = document.createElement("strong");
+    title.textContent = sender;
+
+    const content = document.createElement("div");
+    content.textContent = clean(text);
+
+    box.appendChild(title);
+    box.appendChild(content);
 
     chat.appendChild(box);
 
@@ -76,38 +82,60 @@
     return box;
   }
 
-  function userMessage(text) {
-    return addChat("YOU", text);
+  function showUser(text) {
+    addChat("YOU", text);
   }
 
-  function jarvisMessage(text) {
-    return addChat("J.A.R.V.I.S.", text);
+  function showJarvis(text) {
+    addChat("J.A.R.V.I.S.", text);
   }
 
-  function setBusy(value) {
+  function reply(text, speakNow = true) {
 
-    isBusy = value;
+    const answer = clean(text);
+
+    if (!answer) return;
+
+    showJarvis(answer);
+
+    saveMemory(
+      "lastResponse",
+      answer
+    );
+
+    if (speakNow) {
+      speak(answer);
+    }
+  }
+
+  /* =====================================================
+     BUTTON STATE
+     ===================================================== */
+
+  function setBusy(state) {
+
+    busy = state;
 
     if (send) {
-      send.disabled = value;
-      send.textContent = value
-        ? "WAIT..."
-        : "EXECUTE";
-    }
 
-    document.body.classList.toggle(
-      "jarvis-busy",
-      value
-    );
+      send.disabled = state;
+
+      send.textContent =
+        state
+          ? "WAIT..."
+          : "EXECUTE";
+    }
   }
 
-  /* =========================
+  /* =====================================================
      TEXT TO SPEECH
-     ========================= */
+     ===================================================== */
 
   function speak(text) {
 
-    if (!("speechSynthesis" in window)) {
+    if (
+      !("speechSynthesis" in window)
+    ) {
       return;
     }
 
@@ -115,14 +143,14 @@
 
       window.speechSynthesis.cancel();
 
-      const speech =
+      const utterance =
         new SpeechSynthesisUtterance(
           clean(text)
         );
 
-      speech.rate = 1;
-      speech.pitch = 1;
-      speech.volume = 1;
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
 
       const voices =
         window.speechSynthesis.getVoices();
@@ -139,10 +167,12 @@
         );
 
       if (voice) {
-        speech.voice = voice;
+        utterance.voice = voice;
       }
 
-      window.speechSynthesis.speak(speech);
+      window.speechSynthesis.speak(
+        utterance
+      );
 
     } catch (error) {
       console.warn(
@@ -152,26 +182,9 @@
     }
   }
 
-  function reply(text, speakNow = true) {
-
-    const answer = clean(text);
-
-    if (!answer) {
-      return;
-    }
-
-    jarvisMessage(answer);
-
-    if (speakNow) {
-      speak(answer);
-    }
-
-    saveMemory("lastResponse", answer);
-  }
-
-  /* =========================
+  /* =====================================================
      MEMORY
-     ========================= */
+     ===================================================== */
 
   function getMemory() {
 
@@ -193,7 +206,8 @@
 
     try {
 
-      const memory = getMemory();
+      const memory =
+        getMemory();
 
       memory[key] = value;
 
@@ -202,27 +216,20 @@
         JSON.stringify(memory)
       );
 
-    } catch (error) {
-
-      console.warn(
-        "Memory save failed:",
-        error
-      );
-    }
+    } catch (error) {}
   }
 
   function clearMemory() {
 
     try {
-
       localStorage.removeItem(
         MEMORY_KEY
       );
-
     } catch (error) {}
 
     chat.innerHTML = "";
-    chat.style.display = "none";
+
+    chat.style.display = "block";
 
     msg.value = "";
 
@@ -231,9 +238,9 @@
     );
   }
 
-  /* =========================
-     FETCH HELPERS
-     ========================= */
+  /* =====================================================
+     FETCH
+     ===================================================== */
 
   async function fetchWithTimeout(
     url,
@@ -244,7 +251,7 @@
     const controller =
       new AbortController();
 
-    const timeoutID =
+    const timer =
       setTimeout(
         () => controller.abort(),
         timeout
@@ -252,21 +259,18 @@
 
     try {
 
-      const response =
-        await fetch(
-          url,
-          {
-            ...options,
-            signal:
-              controller.signal
-          }
-        );
-
-      return response;
+      return await fetch(
+        url,
+        {
+          ...options,
+          signal:
+            controller.signal
+        }
+      );
 
     } finally {
 
-      clearTimeout(timeoutID);
+      clearTimeout(timer);
     }
   }
 
@@ -293,21 +297,21 @@
     return await response.json();
   }
 
-  /* =========================
+  /* =====================================================
      OPEN URL
-     ========================= */
+     ===================================================== */
 
   function openURL(url) {
 
     try {
 
-      const newWindow =
+      const win =
         window.open(
           url,
           "_blank"
         );
 
-      if (!newWindow) {
+      if (!win) {
         window.location.href =
           url;
       }
@@ -319,18 +323,15 @@
     }
   }
 
-  /* =========================
+  /* =====================================================
      TIME
-     ========================= */
+     ===================================================== */
 
   function toolTime() {
 
-    const now =
-      new Date();
-
     return (
       "The current time is " +
-      now.toLocaleTimeString(
+      new Date().toLocaleTimeString(
         [],
         {
           hour: "numeric",
@@ -342,9 +343,9 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      WEATHER
-     ========================= */
+     ===================================================== */
 
   async function toolWeather() {
 
@@ -357,9 +358,10 @@
             if (
               !navigator.geolocation
             ) {
+
               reject(
                 new Error(
-                  "Location unavailable"
+                  "Geolocation unavailable"
                 )
               );
 
@@ -381,18 +383,18 @@
           }
         );
 
-      const latitude =
+      const lat =
         position.coords.latitude;
 
-      const longitude =
+      const lon =
         position.coords.longitude;
 
       const url =
         "https://api.open-meteo.com/v1/forecast" +
         "?latitude=" +
-        encodeURIComponent(latitude) +
+        encodeURIComponent(lat) +
         "&longitude=" +
-        encodeURIComponent(longitude) +
+        encodeURIComponent(lon) +
         "&current=" +
         "temperature_2m," +
         "relative_humidity_2m," +
@@ -402,18 +404,18 @@
       const data =
         await getJSON(url);
 
-      const current =
+      const c =
         data.current || {};
 
       return (
         "Current temperature is " +
-        (current.temperature_2m ??
+        (c.temperature_2m ??
           "unavailable") +
         "°C. Humidity is " +
-        (current.relative_humidity_2m ??
+        (c.relative_humidity_2m ??
           "unavailable") +
         "%. Wind speed is " +
-        (current.wind_speed_10m ??
+        (c.wind_speed_10m ??
           "unavailable") +
         " km/h."
       );
@@ -421,15 +423,15 @@
     } catch (error) {
 
       return (
-        "I could not access live weather. " +
+        "I could not get live weather. " +
         "Please allow location permission and try again."
       );
     }
   }
 
-  /* =========================
+  /* =====================================================
      TIMER
-     ========================= */
+     ===================================================== */
 
   function toolTimer(text) {
 
@@ -441,8 +443,7 @@
     if (!match) {
 
       return (
-        "Please specify the timer duration, " +
-        "for example: timer 10 seconds."
+        "Please say a duration, for example: timer 10 seconds."
       );
     }
 
@@ -466,24 +467,18 @@
       multiplier = 3600000;
     }
 
-    const duration =
-      amount * multiplier;
+    setTimeout(
+      function () {
 
-    const timerID =
-      setTimeout(
-        () => {
+        const done =
+          "Timer complete, Boss.";
 
-          const text =
-            "Timer complete, Boss.";
+        showJarvis(done);
+        speak(done);
 
-          jarvisMessage(text);
-          speak(text);
-
-        },
-        duration
-      );
-
-    timers.push(timerID);
+      },
+      amount * multiplier
+    );
 
     return (
       "Timer set for " +
@@ -494,13 +489,14 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      DICE / COIN
-     ========================= */
+     ===================================================== */
 
   function toolDiceCoin(text) {
 
-    const t = lower(text);
+    const t =
+      lower(text);
 
     if (
       t.includes("coin") ||
@@ -509,14 +505,13 @@
       t.includes("కాయిన్")
     ) {
 
-      const result =
-        Math.random() < 0.5
-          ? "Heads"
-          : "Tails";
-
       return (
         "Coin toss result: " +
-        result +
+        (
+          Math.random() < 0.5
+            ? "Heads"
+            : "Tails"
+        ) +
         "."
       );
     }
@@ -554,9 +549,9 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      JOKE
-     ========================= */
+     ===================================================== */
 
   async function toolJoke() {
 
@@ -567,7 +562,9 @@
           "https://v2.jokeapi.dev/joke/Any?safe-mode"
         );
 
-      if (data.type === "single") {
+      if (
+        data.type === "single"
+      ) {
         return data.joke;
       }
 
@@ -591,9 +588,9 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      QUOTE
-     ========================= */
+     ===================================================== */
 
   async function toolQuote() {
 
@@ -610,22 +607,23 @@
           "\"" +
           data.content +
           "\" — " +
-          (data.author ||
-            "Unknown")
+          (
+            data.author ||
+            "Unknown"
+          )
         );
       }
 
     } catch (error) {}
 
     return (
-      "Small progress is still progress. " +
-      "Keep moving forward, Boss."
+      "Small progress is still progress, Boss."
     );
   }
 
-  /* =========================
+  /* =====================================================
      NEWS
-     ========================= */
+     ===================================================== */
 
   async function toolNews() {
 
@@ -655,7 +653,7 @@
       }
 
       items.forEach(
-        (item, index) => {
+        function (item, index) {
 
           const title =
             clean(item.title);
@@ -678,15 +676,14 @@
     } catch (error) {
 
       return (
-        "Live news is temporarily unavailable. " +
-        "You can ask me to search the web for the latest news."
+        "Live news is temporarily unavailable."
       );
     }
   }
 
-  /* =========================
+  /* =====================================================
      TRANSLATE
-     ========================= */
+     ===================================================== */
 
   async function toolTranslate(text) {
 
@@ -698,14 +695,6 @@
         )
         .replace(
           /^.*?అనువదించ/i,
-          ""
-        )
-        .trim();
-
-    query =
-      query
-        .replace(
-          /^this\s+/i,
           ""
         )
         .trim();
@@ -747,9 +736,9 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      CURRENCY
-     ========================= */
+     ===================================================== */
 
   async function toolCurrency(text) {
 
@@ -786,8 +775,7 @@
         data?.rates?.[to];
 
       if (
-        typeof rate !==
-        "number"
+        typeof rate !== "number"
       ) {
         throw new Error(
           "Rate unavailable"
@@ -799,8 +787,9 @@
         " " +
         from +
         " is approximately " +
-        (amount * rate)
-          .toFixed(2) +
+        (
+          amount * rate
+        ).toFixed(2) +
         " " +
         to +
         "."
@@ -809,14 +798,14 @@
     } catch (error) {
 
       return (
-        "I could not retrieve the live exchange rate right now."
+        "I could not retrieve the live exchange rate."
       );
     }
   }
 
-  /* =========================
+  /* =====================================================
      MEANING
-     ========================= */
+     ===================================================== */
 
   async function toolMeaning(text) {
 
@@ -834,10 +823,7 @@
           /^define\s+/i,
           ""
         )
-        .trim();
-
-    word =
-      word
+        .trim()
         .split(/\s+/)[0]
         .replace(
           /[^a-zA-Z'-]/g,
@@ -883,9 +869,9 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      PASSWORD
-     ========================= */
+     ===================================================== */
 
   function toolPassword(text) {
 
@@ -905,24 +891,24 @@
         )
       );
 
-    const characters =
+    const chars =
       "ABCDEFGHJKLMNPQRSTUVWXYZ" +
       "abcdefghijkmnopqrstuvwxyz" +
-      "23456789" +
-      "!@#$%^&*_-+=";
+      "23456789!@#$%^&*_-+=";
 
-    let result = "";
+    let password = "";
+
+    const values =
+      new Uint32Array(length);
 
     if (
       window.crypto &&
       window.crypto.getRandomValues
     ) {
 
-      const values =
-        new Uint32Array(length);
-
-      window.crypto
-        .getRandomValues(values);
+      window.crypto.getRandomValues(
+        values
+      );
 
       for (
         let i = 0;
@@ -930,10 +916,10 @@
         i++
       ) {
 
-        result +=
-          characters[
+        password +=
+          chars[
             values[i] %
-            characters.length
+            chars.length
           ];
       }
 
@@ -945,11 +931,11 @@
         i++
       ) {
 
-        result +=
-          characters[
+        password +=
+          chars[
             Math.floor(
               Math.random() *
-              characters.length
+              chars.length
             )
           ];
       }
@@ -957,17 +943,17 @@
 
     return (
       "Generated password: " +
-      result
+      password
     );
   }
 
-  /* =========================
+  /* =====================================================
      SEARCH
-     ========================= */
+     ===================================================== */
 
   function toolSearch(text) {
 
-    let query =
+    const query =
       text
         .replace(
           /^search\s*(for)?/i,
@@ -998,89 +984,61 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      OPEN APPS
-     ========================= */
+     ===================================================== */
 
   function toolOpenApp(text) {
 
-    const t = lower(text);
+    const t =
+      lower(text);
 
     const apps = [
 
-      {
-        names: [
-          "youtube"
-        ],
-        url:
-          "https://www.youtube.com/"
-      },
+      [
+        "youtube",
+        "https://www.youtube.com/"
+      ],
 
-      {
-        names: [
-          "google"
-        ],
-        url:
-          "https://www.google.com/"
-      },
+      [
+        "google",
+        "https://www.google.com/"
+      ],
 
-      {
-        names: [
-          "gmail",
-          "mail"
-        ],
-        url:
-          "https://mail.google.com/"
-      },
+      [
+        "gmail",
+        "https://mail.google.com/"
+      ],
 
-      {
-        names: [
-          "whatsapp"
-        ],
-        url:
-          "https://web.whatsapp.com/"
-      },
+      [
+        "whatsapp",
+        "https://web.whatsapp.com/"
+      ],
 
-      {
-        names: [
-          "instagram"
-        ],
-        url:
-          "https://www.instagram.com/"
-      },
+      [
+        "instagram",
+        "https://www.instagram.com/"
+      ],
 
-      {
-        names: [
-          "facebook"
-        ],
-        url:
-          "https://www.facebook.com/"
-      },
+      [
+        "facebook",
+        "https://www.facebook.com/"
+      ],
 
-      {
-        names: [
-          "maps",
-          "google maps"
-        ],
-        url:
-          "https://maps.google.com/"
-      },
+      [
+        "maps",
+        "https://maps.google.com/"
+      ],
 
-      {
-        names: [
-          "spotify"
-        ],
-        url:
-          "https://open.spotify.com/"
-      },
+      [
+        "spotify",
+        "https://open.spotify.com/"
+      ],
 
-      {
-        names: [
-          "calculator"
-        ],
-        url:
-          "https://www.google.com/search?q=calculator"
-      }
+      [
+        "calculator",
+        "https://www.google.com/search?q=calculator"
+      ]
 
     ];
 
@@ -1089,17 +1047,14 @@
     ) {
 
       if (
-        app.names.some(
-          name =>
-            t.includes(name)
-        )
+        t.includes(app[0])
       ) {
 
-        openURL(app.url);
+        openURL(app[1]);
 
         return (
           "Opening " +
-          app.names[0] +
+          app[0] +
           "."
         );
       }
@@ -1110,9 +1065,9 @@
     );
   }
 
-  /* =========================
+  /* =====================================================
      YOUTUBE / SONG
-     ========================= */
+     ===================================================== */
 
   function toolYouTube(text) {
 
@@ -1128,10 +1083,6 @@
         )
         .replace(
           /^youtube\s*/i,
-          ""
-        )
-        .replace(
-          /^search\s+youtube\s*(for)?/i,
           ""
         )
         .trim();
@@ -1158,19 +1109,19 @@
       "."
     );
   }
-  /* =========================================================
-   J.A.R.V.I.S. - SCRIPT.JS
-   PART 2 OF 2
-   Paste this DIRECTLY after PART 1.
-   ========================================================= */
+     /* =====================================================
+     J.A.R.V.I.S. SCRIPT.JS
+     PART 2 / 2
+     ===================================================== */
 
-  /* =========================
+  /* =====================================================
      CRYPTO
-     ========================= */
+     ===================================================== */
 
   async function toolCrypto(text) {
 
-    const t = lower(text);
+    const t =
+      lower(text);
 
     const coins = {
       bitcoin: "bitcoin",
@@ -1181,18 +1132,23 @@
       doge: "dogecoin",
       solana: "solana",
       sol: "solana",
-      xrp: "ripple",
       ripple: "ripple",
+      xrp: "ripple",
       cardano: "cardano",
       ada: "cardano"
     };
 
-    let coinID = "bitcoin";
+    let id = "bitcoin";
 
-    for (const key in coins) {
+    for (
+      const key in coins
+    ) {
 
-      if (t.includes(key)) {
-        coinID = coins[key];
+      if (
+        t.includes(key)
+      ) {
+
+        id = coins[key];
         break;
       }
     }
@@ -1203,13 +1159,13 @@
         await getJSON(
           "https://api.coingecko.com/api/v3/simple/price" +
           "?ids=" +
-          encodeURIComponent(coinID) +
+          encodeURIComponent(id) +
           "&vs_currencies=usd,inr" +
           "&include_24hr_change=true"
         );
 
       const coin =
-        data?.[coinID];
+        data?.[id];
 
       if (!coin) {
         throw new Error(
@@ -1218,7 +1174,7 @@
       }
 
       let result =
-        coinID +
+        id +
         " price is $" +
         Number(
           coin.usd
@@ -1253,28 +1209,27 @@
     } catch (error) {
 
       return (
-        "Live crypto data is unavailable right now. Please try again."
+        "Live crypto data is unavailable right now."
       );
     }
   }
 
 
-  /* =========================================================
-     TOOL DISPATCHER
-     ========================================================= */
+  /* =====================================================
+     TOOL HANDLER
+     ===================================================== */
 
   async function handleTools(text) {
 
-    const t = lower(text);
+    const t =
+      lower(text);
 
     /* TIME */
 
     if (
-      /\btime\b/.test(t) ||
-      t.includes("current time") ||
-      t.includes("what time") ||
-      t.includes("టైమ్") ||
-      t.includes("సమయం")
+      t.includes("time") ||
+      t.includes("సమయం") ||
+      t.includes("టైమ్")
     ) {
 
       return toolTime();
@@ -1286,8 +1241,7 @@
     if (
       t.includes("weather") ||
       t.includes("temperature") ||
-      t.includes("వాతావరణం") ||
-      t.includes("టెంపరేచర్")
+      t.includes("వాతావరణం")
     ) {
 
       return await toolWeather();
@@ -1326,7 +1280,6 @@
 
     if (
       t.includes("joke") ||
-      t.includes("tell me a joke") ||
       t.includes("జోక్")
     ) {
 
@@ -1340,8 +1293,7 @@
       t.includes("quote") ||
       t.includes("motivation") ||
       t.includes("motivational") ||
-      t.includes("కోట్") ||
-      t.includes("మోటివేషన్")
+      t.includes("కోట్")
     ) {
 
       return await toolQuote();
@@ -1380,9 +1332,7 @@
       t.includes("currency") ||
       t.includes("exchange rate") ||
       t.includes("convert") ||
-      /\b\d+\s*[a-z]{3}\s+(to|in|into)\s*[a-z]{3}\b/i.test(text) ||
-      t.includes("కరెన్సీ") ||
-      t.includes("కన్వర్ట్")
+      /\d+\s*[a-z]{3}\s+(to|in|into)\s*[a-z]{3}/i.test(text)
     ) {
 
       return await toolCurrency(text);
@@ -1429,7 +1379,7 @@
     }
 
 
-    /* OPEN APP */
+    /* OPEN APPS */
 
     if (
       t.startsWith("open ") ||
@@ -1441,15 +1391,14 @@
       t.includes("open facebook") ||
       t.includes("open maps") ||
       t.includes("open spotify") ||
-      t.includes("open calculator") ||
-      t.includes("ఓపెన్")
+      t.includes("open calculator")
     ) {
 
       return toolOpenApp(text);
     }
 
 
-    /* PLAY SONG / YOUTUBE */
+    /* YOUTUBE / SONG */
 
     if (
       t.startsWith("play ") ||
@@ -1483,26 +1432,25 @@
     }
 
 
-    /* NO TOOL MATCH */
+    /* NO TOOL */
 
     return null;
   }
 
 
-  /* =========================================================
+  /* =====================================================
      LOCAL AI FALLBACK
-     ========================================================= */
+     ===================================================== */
 
   function localAI(text) {
 
-    const t = lower(text);
+    const t =
+      lower(text);
 
     if (
       t === "hi" ||
       t === "hello" ||
-      t === "hey" ||
-      t.includes("good morning") ||
-      t.includes("good evening")
+      t === "hey"
     ) {
 
       return (
@@ -1510,21 +1458,17 @@
       );
     }
 
-
     if (
-      t.includes("who are you") ||
-      t.includes("what are you")
+      t.includes("who are you")
     ) {
 
       return (
-        "I am J.A.R.V.I.S., your personal browser-based AI assistant."
+        "I am J.A.R.V.I.S., your personal AI assistant."
       );
     }
 
-
     if (
-      t.includes("thank you") ||
-      t.includes("thanks")
+      t.includes("thank")
     ) {
 
       return (
@@ -1532,54 +1476,32 @@
       );
     }
 
-
     if (
       t.includes("help") ||
       t.includes("what can you do")
     ) {
 
       return (
-        "I can handle time, weather, timers, dice, coins, jokes, quotes, news, translation, currency, meanings, passwords, web search, apps, YouTube, crypto, voice input, image analysis, memory and AI chat."
+        "I can handle time, weather, timers, dice, coins, jokes, quotes, news, translation, currency, meanings, passwords, search, apps, YouTube, crypto, voice input, image analysis, memory and chat."
       );
     }
-
 
     return (
       "I received your command: " +
       text +
-      ". The online AI service is currently unavailable, but all local J.A.R.V.I.S. tools are still working."
+      "."
     );
   }
 
 
-  /* =========================================================
-     ONLINE AI CHAT
-     ========================================================= */
+  /* =====================================================
+     AI CHAT
+     ===================================================== */
 
   async function askAI(text) {
 
     const memory =
       getMemory();
-
-    const systemPrompt =
-      "You are J.A.R.V.I.S., a helpful personal AI assistant. " +
-      "Answer clearly and naturally. " +
-      "Keep normal answers concise unless the user asks for detail.";
-
-    const userPrompt =
-      systemPrompt +
-      "\nPrevious response: " +
-      (memory.lastResponse || "None") +
-      "\nUser: " +
-      text;
-
-    /*
-      Public fallback AI endpoint.
-
-      If this service is unavailable, the local
-      fallback below prevents the button from
-      becoming stuck.
-    */
 
     try {
 
@@ -1600,7 +1522,15 @@
                   {
                     role: "user",
                     content:
-                      userPrompt
+                      "You are J.A.R.V.I.S., a helpful personal AI assistant. " +
+                      "Answer naturally and clearly. " +
+                      "User says: " +
+                      text +
+                      "\nPrevious response: " +
+                      (
+                        memory.lastResponse ||
+                        "none"
+                      )
                   }
                 ]
               })
@@ -1610,17 +1540,17 @@
 
       if (!response.ok) {
         throw new Error(
-          "AI request failed"
+          "AI unavailable"
         );
       }
 
-      const contentType =
+      const type =
         response.headers.get(
           "content-type"
         ) || "";
 
       if (
-        contentType.includes(
+        type.includes(
           "application/json"
         )
       ) {
@@ -1631,20 +1561,21 @@
         const answer =
           data?.choices?.[0]
             ?.message?.content ||
-          data?.output ||
           data?.response ||
-          data?.text;
+          data?.text ||
+          data?.output;
 
         if (answer) {
           return clean(answer);
         }
+
       } else {
 
-        const textResult =
+        const answer =
           await response.text();
 
-        if (clean(textResult)) {
-          return clean(textResult);
+        if (clean(answer)) {
+          return clean(answer);
         }
       }
 
@@ -1660,9 +1591,9 @@
   }
 
 
-  /* =========================================================
+  /* =====================================================
      IMAGE ANALYSIS
-     ========================================================= */
+     ===================================================== */
 
   async function analyzeImage(file) {
 
@@ -1677,26 +1608,26 @@
     ) {
 
       throw new Error(
-        "Please select a valid image."
+        "Please select an image file."
       );
     }
 
-    const dataURL =
+    const imageData =
       await new Promise(
         (resolve, reject) => {
 
           const reader =
             new FileReader();
 
-          reader.onload = () =>
-            resolve(
+          reader.onload =
+            () => resolve(
               reader.result
             );
 
-          reader.onerror = () =>
-            reject(
+          reader.onerror =
+            () => reject(
               new Error(
-                "Unable to read image."
+                "Could not read image."
               )
             );
 
@@ -1707,41 +1638,35 @@
       );
 
 
-    const dimensions =
+    const size =
       await new Promise(
         (resolve, reject) => {
 
           const image =
             new Image();
 
-          image.onload = () =>
-            resolve({
+          image.onload =
+            () => resolve({
               width:
                 image.naturalWidth,
               height:
                 image.naturalHeight
             });
 
-          image.onerror = () =>
-            reject(
+          image.onerror =
+            () => reject(
               new Error(
                 "Invalid image."
               )
             );
 
           image.src =
-            dataURL;
+            imageData;
         }
       );
 
 
-    /*
-      OCR is used when possible.
-      The image itself is not sent to
-      the chat endpoint.
-    */
-
-    let detectedText = "";
+    let detected = "";
 
     try {
 
@@ -1765,7 +1690,7 @@
 
       form.append(
         "base64Image",
-        dataURL
+        imageData
       );
 
       const response =
@@ -1783,12 +1708,12 @@
         const data =
           await response.json();
 
-        detectedText =
+        detected =
           clean(
             (data.ParsedResults || [])
               .map(
-                item =>
-                  item.ParsedText || ""
+                x =>
+                  x.ParsedText || ""
               )
               .join(" ")
           );
@@ -1806,17 +1731,17 @@
     let result =
       "Image analysis complete. " +
       "Resolution: " +
-      dimensions.width +
+      size.width +
       " × " +
-      dimensions.height +
+      size.height +
       ".";
 
 
-    if (detectedText) {
+    if (detected) {
 
       result +=
         " Detected text: " +
-        detectedText.substring(
+        detected.substring(
           0,
           1000
         );
@@ -1824,7 +1749,7 @@
     } else {
 
       result +=
-        " No readable text was detected in the image.";
+        " No readable text was detected.";
     }
 
 
@@ -1834,11 +1759,9 @@
 
   async function handleImage(file) {
 
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
-    userMessage(
+    showUser(
       "Analyze image: " +
       file.name
     );
@@ -1866,15 +1789,13 @@
   }
 
 
-  /* =========================================================
+  /* =====================================================
      VOICE INPUT
-     ========================================================= */
+     ===================================================== */
 
   function setupVoice() {
 
-    if (!micBtn) {
-      return;
-    }
+    if (!micBtn) return;
 
     const SpeechRecognition =
       window.SpeechRecognition ||
@@ -1883,15 +1804,12 @@
 
     if (!SpeechRecognition) {
 
-      micBtn.title =
-        "Voice input is not supported by this browser.";
-
       micBtn.addEventListener(
         "click",
-        () => {
+        function () {
 
           reply(
-            "Voice input is not supported by this browser. Please use Chrome or another browser with speech recognition."
+            "Voice input is not supported by this browser."
           );
         }
       );
@@ -1912,22 +1830,14 @@
     recognition.interimResults =
       false;
 
-    recognition.maxAlternatives =
-      1;
-
 
     recognition.onstart =
       function () {
 
-        isListening = true;
+        listening = true;
 
         micBtn.classList.add(
           "listening"
-        );
-
-        micBtn.setAttribute(
-          "aria-label",
-          "Stop voice input"
         );
       };
 
@@ -1935,22 +1845,13 @@
     recognition.onresult =
       function (event) {
 
-        const transcript =
-          event
-            ?.results?.[0]?.[0]
+        const text =
+          event.results?.[0]?.[0]
             ?.transcript || "";
 
-        if (!transcript) {
-          return;
-        }
+        if (!text) return;
 
-        msg.value =
-          transcript;
-
-        /*
-          Small delay gives the browser
-          time to update the input.
-        */
+        msg.value = text;
 
         setTimeout(
           runCommand,
@@ -1963,47 +1864,25 @@
       function (event) {
 
         console.warn(
-          "Speech recognition:",
+          "Voice error:",
           event.error
         );
 
-        isListening =
-          false;
+        listening = false;
 
         micBtn.classList.remove(
           "listening"
         );
-
-        micBtn.setAttribute(
-          "aria-label",
-          "Activate voice input"
-        );
-
-        if (
-          event.error ===
-          "not-allowed"
-        ) {
-
-          reply(
-            "Microphone permission was denied. Please allow microphone access."
-          );
-        }
       };
 
 
     recognition.onend =
       function () {
 
-        isListening =
-          false;
+        listening = false;
 
         micBtn.classList.remove(
           "listening"
-        );
-
-        micBtn.setAttribute(
-          "aria-label",
-          "Activate voice input"
         );
       };
 
@@ -2014,7 +1893,7 @@
 
         try {
 
-          if (isListening) {
+          if (listening) {
 
             recognition.stop();
 
@@ -2026,7 +1905,6 @@
         } catch (error) {
 
           console.warn(
-            "Recognition start error:",
             error
           );
         }
@@ -2035,78 +1913,76 @@
   }
 
 
-  /* =========================================================
+  /* =====================================================
      MAIN COMMAND
-     ========================================================= */
+     ===================================================== */
 
   async function runCommand() {
 
-    if (isBusy) {
-      return;
-    }
+    if (busy) return;
 
     const text =
       clean(msg.value);
 
-    if (!text) {
-      return;
-    }
+    if (!text) return;
 
+    /*
+       COMMAND APPEARS INSIDE CHAT BOX
+    */
 
-    userMessage(text);
+    showUser(text);
 
     msg.value = "";
 
     setBusy(true);
 
-
     try {
 
       /*
-        First check local tools.
-        This guarantees commands such as
-        time/weather/timer/etc. don't depend
-        on the AI server.
+         1. CHECK TOOL
       */
 
-      const toolResult =
+      const result =
         await handleTools(text);
 
+      /*
+         2. IF TOOL MATCHED,
+            SHOW ITS RESULT IN CHAT BOX
+      */
 
       if (
-        toolResult !== null &&
-        toolResult !== undefined
+        result !== null &&
+        result !== undefined
       ) {
 
-        reply(
-          toolResult
-        );
+        reply(result);
 
         return;
       }
 
-
       /*
-        Only unknown/custom commands
-        go to AI.
+         3. OTHERWISE SEND TO AI
       */
 
-      const aiAnswer =
+      const answer =
         await askAI(text);
 
-      reply(
-        aiAnswer
-      );
+      /*
+         4. SHOW AI RESPONSE
+            IN CHAT BOX
+      */
+
+      reply(answer);
 
     } catch (error) {
 
       console.error(
-        "JARVIS command error:",
+        "JARVIS error:",
         error
       );
 
       reply(
-        "I encountered an error while processing that command. Please try again."
+        "Command failed. Please try again."
       );
 
     } finally {
@@ -2118,11 +1994,9 @@
   }
 
 
-  /* =========================================================
-     EVENT LISTENERS
-     ========================================================= */
-
-  /* EXECUTE BUTTON */
+  /* =====================================================
+     EVENTS
+     ===================================================== */
 
   send.addEventListener(
     "click",
@@ -2135,15 +2009,12 @@
   );
 
 
-  /* ENTER KEY */
-
   msg.addEventListener(
     "keydown",
     function (event) {
 
       if (
-        event.key === "Enter" &&
-        !event.shiftKey
+        event.key === "Enter"
       ) {
 
         event.preventDefault();
@@ -2153,8 +2024,6 @@
     }
   );
 
-
-  /* CLEAR MEMORY BUTTON */
 
   if (clearBtn) {
 
@@ -2170,9 +2039,10 @@
   }
 
 
-  /* CAMERA BUTTON */
-
-  if (camBtn && imgInput) {
+  if (
+    camBtn &&
+    imgInput
+  ) {
 
     camBtn.addEventListener(
       "click",
@@ -2186,8 +2056,6 @@
   }
 
 
-  /* IMAGE FILE */
-
   if (imgInput) {
 
     imgInput.addEventListener(
@@ -2195,17 +2063,11 @@
       function () {
 
         const file =
-          this.files &&
-          this.files[0];
+          this.files?.[0];
 
         if (file) {
           handleImage(file);
         }
-
-        /*
-          Allows selecting the same
-          image again later.
-        */
 
         this.value = "";
       }
@@ -2213,14 +2075,16 @@
   }
 
 
-  /* VOICE */
+  /* =====================================================
+     START VOICE
+     ===================================================== */
 
   setupVoice();
 
 
-  /* =========================================================
-     GLOBAL FUNCTIONS
-     ========================================================= */
+  /* =====================================================
+     GLOBAL ACCESS
+     ===================================================== */
 
   window.jarvisRun =
     runCommand;
@@ -2238,29 +2102,12 @@
     handleImage;
 
 
-  /* =========================================================
-     STARTUP
-     ========================================================= */
+  /* =====================================================
+     READY
+     ===================================================== */
 
-  try {
-
-    /*
-      Don't automatically speak on page load.
-      Just make the input ready.
-    */
-
-    msg.focus();
-
-    console.log(
-      "J.A.R.V.I.S. system ready."
-    );
-
-  } catch (error) {
-
-    console.warn(
-      "JARVIS startup warning:",
-      error
-    );
-  }
+  console.log(
+    "J.A.R.V.I.S. READY"
+  );
 
 })();
