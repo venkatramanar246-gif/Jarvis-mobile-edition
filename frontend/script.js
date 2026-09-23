@@ -41,16 +41,16 @@ async function handleTools(text){
   }
 
   // 3. Timer
-  const m = t.match(/(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)/i);
+  const m = t.match(/(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|h)/i);
 
   if((t.includes('timer') || t.includes('టైమర్')) && m){
     const amount = parseInt(m[1], 10);
     const unit = m[2].toLowerCase();
 
     const factor =
-      /hours?|hrs?/.test(unit)
+      /hours?|hrs?|h/.test(unit)
         ? 3600000
-        : /seconds?|secs?/.test(unit)
+        : /seconds?|secs?|s/.test(unit)
           ? 1000
           : 60000;
 
