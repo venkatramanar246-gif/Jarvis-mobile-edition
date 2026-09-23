@@ -28,7 +28,9 @@ async function handleTools(text){
             throw new Error('Weather data unavailable');
           }
 
-          res(`It is ${d.current_weather.temperature} degrees Celsius now, Boss.`);
+          res(
+            `It is ${d.current_weather.temperature} degrees Celsius now, Boss.`
+          );
         }catch(e){
           res('Weather service error, Boss.');
         }
@@ -48,7 +50,7 @@ async function handleTools(text){
     const factor =
       /hours?|hrs?/.test(unit)
         ? 3600000
-        : /(seconds?|secs?|s)/.test(unit)
+        : /seconds?|secs?/.test(unit)
           ? 1000
           : 60000;
 
@@ -65,7 +67,8 @@ async function handleTools(text){
 
   // 4. Translate
   if(t.includes('translate')){
-    const q = text.replace(/translate (this )?/i, '').trim() || 'hello';
+    const q =
+      text.replace(/translate (this )?/i, '').trim() || 'hello';
 
     try{
       const r = await fetch(
