@@ -1,1280 +1,439 @@
-/* J.A.R.V.I.S. — Complete JavaScript Controller */
-(() => {
-  "use strict";
+// ==========================================
+// J.A.R.V.I.S. CLIENT ENGINE (script.js)
+// ==========================================
 
-  const $ = (id) => document.getElementById(id);
+const GEMINI_API_KEY = ""; // Enter your Gemini API Key here if using direct AI Brain fallback
 
-  const msg = $("msg");
-  const send = $("send");
-  const micBtn = $("mic-btn");
-  const camBtn = $("cam-btn");
-  const clearBtn = $("clear-btn");
-  const imgInput = $("img-input");
-  const chat = $("chat");
+// 1. DOM Elements Mapping
+const chatContainer = document.getElementById("chat");
+const msgInput = document.getElementById("msg");
+const sendBtn = document.getElementById("send");
+const micBtn = document.getElementById("mic-btn");
+const camBtn = document.getElementById("cam-btn");
+const clearBtn = document.getElementById("clear-btn");
+const imgInput = document.getElementById("img-input");
 
-  if (!msg || !send || !chat) return;
+// 2. Chat History & Memory Initialization
+let chatHistory = JSON.parse(localStorage.getItem("jarvis_chat_history")) || [];
 
-  const MEMORY_KEY = "jarvis_memory_v1";
-  const timers = new Set();
+// Render existing chat history on load
+window.addEventListener("DOMContentLoaded", () => {
+  if (chatHistory.length === 0) {
+    appendMessage("bot", "Online and ready, Boss. How can I assist you today?");
+  } else {
+    chatHistory.forEach(item => renderMessageBubble(item.sender, item.text));
+  }
+});
 
-  let recognition = null;
-  let listening = false;
-  let lastImage = null;
+function saveMemory() {
+  localStorage.setItem("jarvis_chat_history", JSON.stringify(chatHistory));
+}
 
-  async function fetchWithTimeout(url, options = {}, timeout = 12000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
+function renderMessageBubble(sender, text) {
+  const bubble = document.createElement("div");
+  bubble.className = `msg-bubble ${sender}`;
+  bubble.style.margin = "8px 0";
+  bubble.style.padding = "10px 14px";
+  bubble.style.borderRadius = "8px";
+  bubble.style.maxWidth = "80%";
+  bubble.style.wordBreak = "break-word";
+  bubble.style.fontSize = "14px";
+  bubble.style.lineHeight = "1.4";
 
-    try {
-      return await fetch(url, {
-        ...options,
-        signal: controller.signal
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+  if (sender === "user") {
+    bubble.style.alignSelf = "flex-end";
+    bubble.style.background = "#00e5ff22";
+    bubble.style.border = "1px solid #00e5ff";
+    bubble.style.color = "#00e5ff";
+    bubble.style.marginLeft = "auto";
+  } else {
+    bubble.style.alignSelf = "flex-start";
+    bubble.style.background = "#ffffff11";
+    bubble.style.border = "1px solid #ffffff33";
+    bubble.style.color = "#ffffff";
+    bubble.style.marginRight = "auto";
   }
 
-  async function fetchJSON(url, options = {}, timeout = 12000) {
-    const response = await fetchWithTimeout(url, options, timeout);
+  bubble.textContent = text;
+  chatContainer.appendChild(bubble);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+}
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+function appendMessage(sender, text) {
+  chatHistory.push({ sender, text });
+  saveMemory();
+  renderMessageBubble(sender, text);
+}
 
-    return await response.json();
+// 3. Speech Synthesis (Text to Speech)
+function speak(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel(); // Stop active speech
+
+  const cleanText = text.replace(/[*#_`]/g, "");
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+  utterance.rate = 1.0;
+  utterance.pitch = 1.0;
+
+  // Language auto-detection for Telugu / English
+  if (/[\u0C00-\u0C7F]/.test(cleanText)) {
+    utterance.lang = "te-IN";
+  } else {
+    utterance.lang = "en-US";
   }
 
-  function cleanText(value) {
-    return String(value ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
+  window.speechSynthesis.speak(utterance);
+}
+
+// 4. Speech Recognition (Voice Input)
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let isRecording = false;
+
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = "en-IN";
+
+  recognition.onstart = () => {
+    isRecording = true;
+    micBtn.style.filter = "drop-shadow(0 0 8px #00e5ff)";
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    msgInput.value = transcript;
+    handleUserSubmission(transcript);
+  };
+
+  recognition.onerror = () => {
+    isRecording = false;
+    micBtn.style.filter = "none";
+  };
+
+  recognition.onend = () => {
+    isRecording = false;
+    micBtn.style.filter = "none";
+  };
+}
+
+micBtn.addEventListener("click", () => {
+  if (!recognition) {
+    alert("Speech recognition is not supported in this browser.");
+    return;
+  }
+  if (isRecording) {
+    recognition.stop();
+  } else {
+    recognition.start();
+  }
+});
+
+// 5. All 15 Tools Implementation
+async function handleTools(text) {
+  const t = text.toLowerCase().trim();
+
+  // 1. Time
+  if (/\btime\b/.test(t) || t.includes("టైమ్") || t.includes("సమయం")) {
+    const timeStr = new Date().toLocaleTimeString();
+    return `The time is ${timeStr}, Boss.`;
   }
 
-  function escapeHTML(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    }[ch]));
-  }
-
-  function addMessage(text, who = "J.A.R.V.I.S.") {
-    const item = document.createElement("div");
-
-    item.className = "message";
-
-    item.innerHTML =
-      `<b>${escapeHTML(who)}</b><div>${escapeHTML(text)}</div>`;
-
-    chat.appendChild(item);
-    chat.scrollTop = chat.scrollHeight;
-    chat.style.display = "block";
-
-    return item;
-  }
-
-  function addUserMessage(text) {
-    return addMessage(text, "YOU");
-  }
-
-  function speak(text) {
-    if (!("speechSynthesis" in window)) return;
-
-    try {
-      window.speechSynthesis.cancel();
-
-      const utterance = new SpeechSynthesisUtterance(
-        cleanText(text)
-      );
-
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-
-      const voices = window.speechSynthesis.getVoices();
-
-      const preferred =
-        voices.find(v => /^en-IN$/i.test(v.lang)) ||
-        voices.find(v => /^en-US$/i.test(v.lang)) ||
-        voices.find(v => /^en-GB$/i.test(v.lang));
-
-      if (preferred) {
-        utterance.voice = preferred;
-      }
-
-      window.speechSynthesis.speak(utterance);
-    } catch (_) {}
-  }
-
-  function reply(text, options = {}) {
-    const answer = cleanText(text);
-
-    addMessage(answer);
-
-    if (options.speak !== false) {
-      speak(answer);
-    }
-
-    saveMemory("lastResponse", answer);
-
-    return answer;
-  }
-
-  function saveMemory(key, value) {
-    try {
-      const memory = JSON.parse(
-        localStorage.getItem(MEMORY_KEY) || "{}"
-      );
-
-      memory[key] = value;
-
-      localStorage.setItem(
-        MEMORY_KEY,
-        JSON.stringify(memory)
-      );
-    } catch (_) {}
-  }
-
-  function getMemory() {
-    try {
-      return JSON.parse(
-        localStorage.getItem(MEMORY_KEY) || "{}"
-      );
-    } catch (_) {
-      return {};
-    }
-  }
-
-  function clearMemory() {
-    try {
-      localStorage.removeItem(MEMORY_KEY);
-    } catch (_) {}
-
-    chat.innerHTML = "";
-    chat.style.display = "none";
-    msg.value = "";
-
-    reply("Memory cleared, Boss.");
-  }
-
-  function setBusy(state) {
-    if (send) {
-      send.disabled = state;
-      send.dataset.busy = state ? "1" : "0";
-      send.textContent = state ? "WAIT..." : "EXECUTE";
-    }
-
-    document.body.classList.toggle(
-      "jarvis-busy",
-      state
-    );
-  }
-
-  function openURL(url) {
-    try {
-      const w = window.open(
-        url,
-        "_blank",
-        "noopener,noreferrer"
-      );
-
-      if (!w) {
-        window.location.href = url;
-      }
-    } catch (_) {
-      window.location.href = url;
-    }
-  }
-
-  function normalize(text) {
-    return cleanText(text).toLowerCase();
-  }
-
-  function randomItem(array) {
-    return array[
-      Math.floor(Math.random() * array.length)
-    ];
-  }
-
-  function parseDuration(text) {
-    const match = normalize(text).match(
-      /(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b/i
-    );
-
-    if (!match) return null;
-
-    const amount = Number(match[1]);
-    const unit = match[2].toLowerCase();
-
-    let factor = 1000;
-
-    if (/^(minutes?|mins?|m)$/.test(unit)) {
-      factor = 60000;
-    }
-
-    if (/^(hours?|hrs?|h)$/.test(unit)) {
-      factor = 3600000;
-    }
-
-    const duration = Math.max(
-      1000,
-      Math.round(amount * factor)
-    );
-
-    return {
-      amount,
-      unit,
-      duration
-    };
-  }
-
-  async function handleTools(text) {
-    const t = normalize(text);
-
-    /* 1. TIME */
-
-    if (
-      /\btime\b/.test(t) ||
-      t.includes("what time") ||
-      t.includes("current time") ||
-      t.includes("టైమ్") ||
-      t.includes("సమయం")
-    ) {
-      return `The time is ${new Date().toLocaleTimeString([], {
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit"
-      })}, Boss.`;
-    }
-
-    /* 2. WEATHER */
-
-    if (
-      t.includes("weather") ||
-      t.includes("temperature") ||
-      t.includes("వాతావరణం") ||
-      t.includes("టెంపరేచర్")
-    ) {
-      return await getWeather();
-    }
-
-    /* 3. TIMER */
-
-    const durationInfo = parseDuration(t);
-
-    if (
-      (
-        t.includes("timer") ||
-        t.includes("alarm") ||
-        t.includes("టైమర్")
-      ) &&
-      durationInfo
-    ) {
-      const {
-        amount,
-        unit,
-        duration
-      } = durationInfo;
-
-      const id = setTimeout(() => {
-        timers.delete(id);
-
-        const completed =
-          `Timer complete. ${amount} ${unit} is finished, Boss.`;
-
-        addMessage(completed);
-        speak(completed);
-      }, duration);
-
-      timers.add(id);
-
-      return `Timer set for ${amount} ${unit}.`;
-    }
-
-    /* 4. DICE / COIN */
-
-    if (
-      /\b(dice|roll|coin|flip|toss)\b/.test(t) ||
-      t.includes("డైస్") ||
-      t.includes("కాయిన్")
-    ) {
-      if (
-        /\b(coin|flip|toss)\b/.test(t) ||
-        t.includes("కాయిన్")
-      ) {
-        return `Coin toss result: ${
-          Math.random() < 0.5
-            ? "Heads"
-            : "Tails"
-        }.`;
-      }
-
-      const sidesMatch = t.match(
-        /\b(?:d|dice)\s*(\d{1,3})\b/
-      );
-
-      const sides = Math.max(
-        2,
-        Math.min(
-          1000,
-          Number(sidesMatch?.[1] || 6)
-        )
-      );
-
-      return `Dice roll: ${
-        Math.floor(Math.random() * sides) + 1
-      } on a ${sides}-sided die.`;
-    }
-
-    /* 5. JOKE */
-
-    if (
-      t.includes("joke") ||
-      t.includes("tell me a joke") ||
-      t.includes("జోక్")
-    ) {
-      try {
-        const d = await fetchJSON(
-          "https://v2.jokeapi.dev/joke/Any?safe-mode&type=single"
-        );
-
-        if (d.joke) {
-          return d.joke;
-        }
-
-        if (d.setup && d.delivery) {
-          return `${d.setup} ${d.delivery}`;
-        }
-      } catch (_) {}
-
-      return randomItem([
-        "Why did the computer get cold? It left its Windows open.",
-        "I told my code to behave. It responded with another bug.",
-        "Why do programmers prefer dark mode? Because light attracts bugs."
-      ]);
-    }
-
-    /* 6. QUOTE */
-
-    if (
-      t.includes("quote") ||
-      t.includes("motivation") ||
-      t.includes("motivational") ||
-      t.includes("కోట్") ||
-      t.includes("మోటివేషన్")
-    ) {
-      try {
-        const d = await fetchJSON(
-          "https://api.quotable.io/random",
-          {},
-          10000
-        );
-
-        if (d.content) {
-          return `"${d.content}" — ${d.author || "Unknown"}`;
-        }
-      } catch (_) {}
-
-      return randomItem([
-        "Small progress is still progress.",
-        "Discipline turns intentions into results.",
-        "The best way to learn is to build."
-      ]);
-    }
-
-    /* 7. NEWS */
-
-    if (
-      /\b(news|headlines|latest news)\b/.test(t) ||
-      t.includes("వార్తలు")
-    ) {
-      return await getNews();
-    }
-
-    /* 8. TRANSLATE */
-
-    if (
-      t.includes("translate") ||
-      t.includes("అనువదించ") ||
-      t.includes("ట్రాన్స్‌లేట్")
-    ) {
-      return await translateText(text);
-    }
-
-    /* 9. CURRENCY */
-
-    if (
-      /\b(currency|convert|exchange rate|forex)\b/.test(t) ||
-      t.includes("కరెన్సీ") ||
-      t.includes("కన్వర్ట్")
-    ) {
-      return await convertCurrency(text);
-    }
-
-    /* 10. MEANING */
-
-    if (
-      /\b(meaning|define|definition|dictionary)\b/.test(t) ||
-      t.includes("meaning of") ||
-      t.includes("అర్థం")
-    ) {
-      return await getMeaning(text);
-    }
-
-    /* 11. PASSWORD */
-
-    if (
-      t.includes("password") ||
-      t.includes("generate password") ||
-      t.includes("strong password") ||
-      t.includes("పాస్‌వర్డ్")
-    ) {
-      const match = t.match(/\b(\d{2,3})\b/);
-
-      const length = Math.max(
-        8,
-        Math.min(
-          64,
-          Number(match?.[1] || 16)
-        )
-      );
-
-      return `Generated password: ${generatePassword(length)}`;
-    }
-
-    /* 12. SEARCH */
-
-    if (
-      t === "search" ||
-      t.startsWith("search ") ||
-      t.includes("search for ") ||
-      t.includes("వెతుకు")
-    ) {
-      const q = text
-        .replace(/^search\s*(for)?/i, "")
-        .replace(/^వెతుకు/i, "")
-        .trim();
-
-      if (!q) {
-        return "Tell me what you want me to search for.";
-      }
-
-      openURL(
-        `https://www.google.com/search?q=${encodeURIComponent(q)}`
-      );
-
-      return `Searching the web for ${q}.`;
-    }
-
-    /* 13. OPEN APPS */
-
-    if (
-      t.includes("open youtube") ||
-      t.includes("open google") ||
-      t.includes("open gmail") ||
-      t.includes("open whatsapp") ||
-      t.includes("open instagram") ||
-      t.includes("open facebook") ||
-      t.includes("open maps") ||
-      t.includes("open spotify") ||
-      t.includes("open calculator") ||
-      t.includes("open apps") ||
-      t.includes("ఓపెన్")
-    ) {
-      return openAppCommand(t);
-    }
-
-    /* 14. PLAY SONGS / YOUTUBE */
-
-    if (
-      t.includes("play song") ||
-      t.includes("play music") ||
-      t.includes("youtube") ||
-      t.startsWith("play ") ||
-      t.includes("పాట")
-    ) {
-      const q = text
-        .replace(/^(please\s+)?play\s+/i, "")
-        .replace(/^youtube\s*/i, "")
-        .replace(/^(search\s+)?youtube\s*(for)?/i, "")
-        .trim();
-
-      if (!q) {
-        openURL("https://www.youtube.com/");
-        return "Opening YouTube, Boss.";
-      }
-
-      openURL(
-        `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`
-      );
-
-      return `Searching YouTube for ${q}.`;
-    }
-
-    /* 15. CRYPTO */
-
-    if (
-      /\b(crypto|bitcoin|btc|ethereum|eth|dogecoin|doge|solana|sol)\b/.test(t) ||
-      t.includes("క్రిప్టో")
-    ) {
-      return await getCrypto(text);
-    }
-
-    return null;
-  }
-
-  async function getWeather() {
-    try {
-      const position = await new Promise(
-        (resolve, reject) => {
-          if (!navigator.geolocation) {
-            reject(
-              new Error("Geolocation unsupported")
-            );
-            return;
-          }
-
-          navigator.geolocation.getCurrentPosition(
-            resolve,
-            reject,
-            {
-              enableHighAccuracy: false,
-              timeout: 8000,
-              maximumAge: 300000
-            }
-          );
-        }
-      );
-
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
-
-      const data = await fetchJSON(
-        `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=auto`
-      );
-
-      const c = data.current || {};
-
-      const temp = c.temperature_2m;
-      const unit =
-        data.current_units?.temperature_2m || "°C";
-
-      return `Current temperature is ${temp ?? "unavailable"}${unit}, humidity ${c.relative_humidity_2m ?? "unavailable"}%, wind ${c.wind_speed_10m ?? "unavailable"} km/h.`;
-
-    } catch (_) {
-      try {
-        const ip = await fetchJSON(
-          "https://ipapi.co/json/",
-          {},
-          8000
-        );
-
-        if (ip.latitude && ip.longitude) {
-          const data = await fetchJSON(
-            `https://api.open-meteo.com/v1/forecast?latitude=${ip.latitude}&longitude=${ip.longitude}&current=temperature_2m,relative_humidity_2m,wind_speed_10m&timezone=auto`
-          );
-
-          const c = data.current || {};
-
-          return `Current temperature near ${
-            ip.city || "your area"
-          } is ${
-            c.temperature_2m ?? "unavailable"
-          }°C, humidity ${
-            c.relative_humidity_2m ?? "unavailable"
-          }%.`;
-        }
-      } catch (_) {}
-
-      return "I couldn't get live weather right now. Please allow location access and try again.";
-    }
-  }
-
-  async function getNews() {
-    try {
-      const rss =
-        "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en";
-
-      const d = await fetchJSON(
-        `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rss)}`,
-        {},
-        12000
-      );
-
-      const items = Array.isArray(d.items)
-        ? d.items.slice(0, 5)
-        : [];
-
-      if (!items.length) {
-        throw new Error("No headlines");
-      }
-
-      items.forEach((item, index) => {
-        const title = cleanText(item.title);
-
-        if (title) {
-          addMessage(
-            `${index + 1}. ${title}`,
-            "NEWS"
-          );
-        }
-      });
-
-      return "Here are the latest headlines I could retrieve.";
-
-    } catch (_) {
-      return "Live news is temporarily unavailable. I can still open Google News for the latest headlines.";
-    }
-  }
-
-  async function translateText(original) {
-    let q = original
-      .replace(/^.*?\btranslate\b/i, "")
-      .replace(/^.*?అనువదించ(?:ు|ండి)?/i, "")
-      .replace(/^.*?ట్రాన్స్‌లేట్/i, "")
-      .trim();
-
-    q = q
-      .replace(
-        /^(this|it|to telugu|into telugu)\s*/i,
-        ""
-      )
-      .trim();
-
-    if (!q) {
-      q = msg.value.trim() || "hello";
-    }
-
-    try {
-      const url =
-        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(q)}&langpair=auto|te`;
-
-      const d = await fetchJSON(
-        url,
-        {},
-        12000
-      );
-
-      const translated =
-        d?.responseData?.translatedText;
-
-      if (translated) {
-        return `In Telugu: ${translated}`;
-      }
-    } catch (_) {}
-
-    return "Translation service is unavailable right now.";
-  }
-
-  async function convertCurrency(text) {
-    const match = text.match(
-      /(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s*(?:to|in|into)\s*([A-Za-z]{3})/i
-    );
-
-    if (!match) {
-      return "Use a format such as: 100 USD to INR.";
-    }
-
-    const amount = Number(match[1]);
-    const from = match[2].toUpperCase();
-    const to = match[3].toUpperCase();
-
-    try {
-      const d = await fetchJSON(
-        `https://open.er-api.com/v6/latest/${encodeURIComponent(from)}`,
-        {},
-        12000
-      );
-
-      const rate = d?.rates?.[to];
-
-      if (typeof rate !== "number") {
-        throw new Error("Currency unavailable");
-      }
-
-      return `${amount} ${from} is approximately ${(amount * rate).toFixed(2)} ${to}.`;
-
-    } catch (_) {
-      return `I couldn't retrieve the live ${from} to ${to} exchange rate right now.`;
-    }
-  }
-
-  async function getMeaning(text) {
-    let word = text
-      .replace(
-        /^(what is the )?meaning (of)?/i,
-        ""
-      )
-      .replace(/^define\s+/i, "")
-      .replace(/^dictionary\s+/i, "")
-      .trim()
-      .split(/\s+/)[0]
-      .replace(/[^\w'-]/g, "");
-
-    if (!word) {
-      return "Tell me the word you want defined.";
-    }
-
-    try {
-      const d = await fetchJSON(
-        `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
-        {},
-        10000
-      );
-
-      const meaning =
-        d?.[0]?.meanings?.[0]?.definitions?.[0]?.definition;
-
-      if (meaning) {
-        return `${word}: ${meaning}`;
-      }
-
-    } catch (_) {}
-
-    return `I couldn't find a dictionary definition for "${word}".`;
-  }
-
-  function generatePassword(length) {
-    const chars =
-      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*_-+=";
-
-    const values = new Uint32Array(length);
-
-    if (window.crypto?.getRandomValues) {
-      crypto.getRandomValues(values);
-
-      return Array
-        .from(
-          values,
-          n => chars[n % chars.length]
-        )
-        .join("");
-    }
-
-    let output = "";
-
-    for (let i = 0; i < length; i++) {
-      output += chars[
-        Math.floor(
-          Math.random() * chars.length
-        )
-      ];
-    }
-
-    return output;
-  }
-
-  function openAppCommand(t) {
-    const apps = [
-      ["youtube", "https://www.youtube.com/"],
-      ["google", "https://www.google.com/"],
-      ["gmail", "https://mail.google.com/"],
-      ["whatsapp", "https://web.whatsapp.com/"],
-      ["instagram", "https://www.instagram.com/"],
-      ["facebook", "https://www.facebook.com/"],
-      ["maps", "https://maps.google.com/"],
-      ["spotify", "https://open.spotify.com/"],
-      [
-        "calculator",
-        "https://www.google.com/search?q=calculator"
-      ]
-    ];
-
-    for (const [name, url] of apps) {
-      if (t.includes(name)) {
-        openURL(url);
-        return `Opening ${name}.`;
-      }
-    }
-
-    return "Tell me which app you want to open.";
-  }
-
-  async function getCrypto(text) {
-    const t = normalize(text);
-
-    const known = {
-      bitcoin: "bitcoin",
-      btc: "bitcoin",
-      ethereum: "ethereum",
-      eth: "ethereum",
-      dogecoin: "dogecoin",
-      doge: "dogecoin",
-      solana: "solana",
-      sol: "solana",
-      xrp: "ripple",
-      ripple: "ripple",
-      cardano: "cardano",
-      ada: "cardano"
-    };
-
-    let id = Object.keys(known)
-      .find(k => t.includes(k));
-
-    id = id ? known[id] : "bitcoin";
-
-    try {
-      const d = await fetchJSON(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(id)}&vs_currencies=usd,inr&include_24hr_change=true`,
-        {},
-        12000
-      );
-
-      const coin = d?.[id];
-
-      if (!coin) {
-        throw new Error("Coin unavailable");
-      }
-
-      const usd = coin.usd;
-      const inr = coin.inr;
-      const change = coin.usd_24h_change;
-
-      return `${id} price: $${Number(usd).toLocaleString()} or ₹${Number(inr).toLocaleString()}${
-        typeof change === "number"
-          ? `, 24-hour change ${change.toFixed(2)}%`
-          : ""
-      }.`;
-
-    } catch (_) {
-      return "Live crypto data is temporarily unavailable. Please try again shortly.";
-    }
-  }
-
-  function setupVoice() {
-    const SpeechRecognition =
-      window.SpeechRecognition ||
-      window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition || !micBtn) {
-      return;
-    }
-
-    recognition = new SpeechRecognition();
-
-    recognition.lang = "en-IN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => {
-      listening = true;
-
-      micBtn.classList.add("listening");
-
-      micBtn.setAttribute(
-        "aria-label",
-        "Stop voice input"
-      );
-    };
-
-    recognition.onresult = (event) => {
-      const result =
-        event.results?.[0]?.[0]?.transcript || "";
-
-      msg.value = result;
-      msg.focus();
-
-      runCommand();
-    };
-
-    recognition.onerror = () => {
-      listening = false;
-
-      micBtn.classList.remove("listening");
-
-      micBtn.setAttribute(
-        "aria-label",
-        "Activate voice input"
-      );
-    };
-
-    recognition.onend = () => {
-      listening = false;
-
-      micBtn.classList.remove("listening");
-
-      micBtn.setAttribute(
-        "aria-label",
-        "Activate voice input"
-      );
-    };
-
-    micBtn.addEventListener(
-      "click",
-      () => {
-        try {
-          if (listening) {
-            recognition.stop();
-          } else {
-            recognition.start();
-          }
-        } catch (_) {}
-      }
-    );
-  }
-
-  function analyzeImage(file) {
-    return new Promise((resolve, reject) => {
-      if (
-        !file ||
-        !file.type.startsWith("image/")
-      ) {
-        reject(
-          new Error("Please select an image file.")
-        );
+  // 2. Weather
+  if (t.includes("weather") || t.includes("వాతావరణం")) {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve("Geolocation is not supported by your browser, Boss.");
         return;
       }
-
-      const reader = new FileReader();
-
-      reader.onload = () => {
-        const dataURL = reader.result;
-        const img = new Image();
-
-        img.onload = async () => {
-          lastImage = {
-            file,
-            dataURL,
-            width: img.naturalWidth,
-            height: img.naturalHeight
-          };
-
-          let ocrText = "";
-
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
           try {
-            const form = new FormData();
-
-            form.append(
-              "apikey",
-              "helloworld"
-            );
-
-            form.append(
-              "language",
-              "eng"
-            );
-
-            form.append(
-              "isOverlayRequired",
-              "false"
-            );
-
-            form.append(
-              "base64Image",
-              dataURL
-            );
-
-            const d = await fetchJSON(
-              "https://api.ocr.space/parse/image",
-              {
-                method: "POST",
-                body: form
-              },
-              20000
-            );
-
-            ocrText = cleanText(
-              (d?.ParsedResults || [])
-                .map(
-                  x => x.ParsedText || ""
-                )
-                .join(" ")
-            );
-
-          } catch (_) {}
-
-          const sizeKB =
-            Math.round(file.size / 1024);
-
-          let result =
-            `Image received: ${file.name}. Resolution ${img.naturalWidth}×${img.naturalHeight}, ${sizeKB} KB.`;
-
-          if (ocrText) {
-            result +=
-              ` Detected text: ${ocrText.slice(0, 700)}`;
-          } else {
-            result +=
-              " I could not extract readable text from this image.";
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
+            const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+            const data = await res.json();
+            resolve(`The current temperature is ${data.current_weather.temperature}°C, Boss.`);
+          } catch (err) {
+            resolve("Unable to retrieve weather data right now, Boss.");
           }
-
-          resolve(result);
-        };
-
-        img.onerror = () => {
-          reject(
-            new Error(
-              "The selected image could not be read."
-            )
-          );
-        };
-
-        img.src = dataURL;
-      };
-
-      reader.onerror = () => {
-        reject(
-          new Error(
-            "Could not read the image file."
-          )
-        );
-      };
-
-      reader.readAsDataURL(file);
+        },
+        () => resolve("I need location permission to check the weather, Boss.")
+      );
     });
   }
 
-  async function handleImageFile(file) {
-    if (!file) return;
+  // 3. Timer
+  const timerMatch = t.match(/(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)/i);
+  if ((t.includes("timer") || t.includes("టైమర్")) && timerMatch) {
+    const amount = parseInt(timerMatch[1]);
+    const unit = timerMatch[2].toLowerCase();
+    let duration = amount * 1000;
+    if (/^(minutes?|mins?)$/.test(unit)) duration = amount * 60 * 1000;
+    if (/^(hours?|hrs?)$/.test(unit)) duration = amount * 3600 * 1000;
 
-    addUserMessage(
-      `Analyze image: ${file.name}`
-    );
+    setTimeout(() => {
+      const alertMsg = `Boss, your timer for ${amount} ${unit} has completed! టైమర్ పూర్తయింది!`;
+      appendMessage("bot", alertMsg);
+      speak(alertMsg);
+    }, duration);
 
-    setBusy(true);
+    return `Timer set for ${amount} ${unit}, Boss.`;
+  }
 
+  // 4. Dice / Coin
+  if (t.includes("roll a dice") || t.includes("roll dice") || t.includes("dice") || t.includes("పాచిక")) {
+    const diceRoll = Math.floor(Math.random() * 6) + 1;
+    return `You rolled a ${diceRoll}, Boss.`;
+  }
+  if (t.includes("flip a coin") || t.includes("toss a coin") || t.includes("coin toss") || t.includes("నాణెం")) {
+    const outcome = Math.random() < 0.5 ? "Heads" : "Tails";
+    return `It is ${outcome}, Boss.`;
+  }
+
+  // 5. Joke
+  if (t.includes("joke") || t.includes("జోక్")) {
     try {
-      const result =
-        await analyzeImage(file);
-
-      reply(result);
-
-    } catch (e) {
-      reply(
-        e.message ||
-        "Image analysis failed."
-      );
-    } finally {
-      setBusy(false);
+      const res = await fetch("https://v2.jokeapi.dev/joke/Any?safe-mode&type=single");
+      const data = await res.json();
+      return data.joke || "Why do programmers prefer dark mode? Because light attracts bugs!";
+    } catch {
+      return "Why do Java developers wear glasses? Because they don't C#!";
     }
   }
 
-  async function askAI(text) {
-    const memory = getMemory();
-
-    const context = [
-      "You are J.A.R.V.I.S., a concise personal AI assistant.",
-      "Answer clearly and helpfully. Do not claim to have performed actions you did not perform.",
-      `Previous response: ${memory.lastResponse || "none"}`,
-      `User: ${text}`
-    ].join("\n");
-
+  // 6. Quote
+  if (t.includes("quote") || t.includes("motivat") || t.includes("కోట్")) {
     try {
-      const response =
-        await fetchWithTimeout(
-          "https://text.pollinations.ai/openai",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json"
-            },
-            body: JSON.stringify({
-              model: "openai",
-              messages: [
-                {
-                  role: "user",
-                  content: context
-                }
-              ],
-              temperature: 0.4
-            })
-          },
-          20000
-        );
-
-      if (!response.ok) {
-        throw new Error(
-          `AI HTTP ${response.status}`
-        );
-      }
-
-      const data =
-        await response.json();
-
-      const answer =
-        data?.choices?.[0]?.message?.content ||
-        data?.choices?.[0]?.text ||
-        data?.output_text;
-
-      if (answer) {
-        return cleanText(answer);
-      }
-
-    } catch (_) {}
-
-    return localAssistant(text);
+      const res = await fetch("https://dummyjson.com/quotes/random");
+      const data = await res.json();
+      return `"${data.quote}" — ${data.author}`;
+    } catch {
+      return '"Success is not final, failure is not fatal: it is the courage to continue that counts." — Winston Churchill';
+    }
   }
 
-  function localAssistant(text) {
-    const t = normalize(text);
-
-    if (
-      /^(hi|hello|hey|good morning|good evening)\b/.test(t)
-    ) {
-      return "Hello, Boss. Systems are ready.";
-    }
-
-    if (
-      t.includes("who are you") ||
-      t.includes("what are you")
-    ) {
-      return "I am J.A.R.V.I.S., your browser-based personal AI assistant.";
-    }
-
-    if (t.includes("thank")) {
-      return "You're welcome, Boss.";
-    }
-
-    if (
-      t.includes("help") ||
-      t.includes("what can you do")
-    ) {
-      return "I can handle time, weather, timers, dice and coins, jokes, quotes, news, translation, currency, meanings, passwords, web search, apps, YouTube, crypto, voice input, image OCR, memory, and chat.";
-    }
-
-    return `I received: "${cleanText(text)}". My online AI service is unavailable right now, but my local tools are still operational.`;
-  }
-
-  async function runCommand() {
-    const text = cleanText(msg.value);
-
-    if (!text) return;
-
-    addUserMessage(text);
-
-    msg.value = "";
-
-    setBusy(true);
-
+  // 7. News
+  if (t.includes("news") || t.includes("వార్తలు")) {
     try {
-      const toolResult =
-        await handleTools(text);
-
-      if (toolResult !== null) {
-        reply(toolResult);
-        return;
+      const res = await fetch("https://api.spaceflightnewsapi.net/v4/articles/?limit=3");
+      const data = await res.json();
+      if (data.results && data.results.length > 0) {
+        const headlines = data.results.map((a, i) => `${i + 1}. ${a.title}`).join("\n");
+        return `Here are the latest headlines, Boss:\n${headlines}`;
       }
-
-      const aiResult =
-        await askAI(text);
-
-      reply(aiResult);
-
-    } catch (_) {
-      reply(
-        "Command failed safely. Please try again."
-      );
-
-    } finally {
-      setBusy(false);
-      msg.focus();
+      return "No current news feeds available at the moment, Boss.";
+    } catch {
+      return "Unable to fetch live news right now, Boss.";
     }
   }
 
-  /* SEND */
+  // 8. Translate
+  if (t.startsWith("translate") || t.includes("అనువాదం")) {
+    const cleanQuery = text.replace(/translate/i, "").replace(/అనువాదం/i, "").trim() || "Hello, how are you?";
+    try {
+      const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(cleanQuery)}&langpair=en|te`);
+      const data = await res.json();
+      return `Translation: ${data.responseData.translatedText}`;
+    } catch {
+      return "Translate service encountered an error, Boss.";
+    }
+  }
 
-  send.addEventListener(
-    "click",
-    runCommand
-  );
+  // 9. Currency
+  if (t.includes("convert") || t.includes("currency") || t.includes("exchange rate") || t.includes("రూపాయి")) {
+    try {
+      const res = await fetch("https://open.er-api.com/v6/latest/USD");
+      const data = await res.json();
+      const inrRate = data.rates.INR;
+      return `The current exchange rate is 1 USD = ${inrRate.toFixed(2)} INR, Boss.`;
+    } catch {
+      return "Could not retrieve the current exchange rate, Boss.";
+    }
+  }
 
-  /* ENTER */
-
-  msg.addEventListener(
-    "keydown",
-    (event) => {
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey
-      ) {
-        event.preventDefault();
-        runCommand();
+  // 10. Meaning / Dictionary
+  if (t.startsWith("meaning of") || t.startsWith("define ") || t.includes("అర్థం")) {
+    const word = t.replace("meaning of", "").replace("define", "").replace("అర్థం", "").trim().split(" ")[0];
+    if (word) {
+      try {
+        const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+        const data = await res.json();
+        const def = data[0]?.meanings[0]?.definitions[0]?.definition;
+        if (def) return `The meaning of ${word} is: ${def}`;
+        return `I couldn't find the definition for "${word}", Boss.`;
+      } catch {
+        return `Sorry Boss, I couldn't fetch the definition for ${word}.`;
       }
     }
-  );
-
-  /* CLEAR MEMORY */
-
-  if (clearBtn) {
-    clearBtn.addEventListener(
-      "click",
-      clearMemory
-    );
   }
 
-  /* CAMERA / IMAGE */
-
-  if (camBtn && imgInput) {
-    camBtn.addEventListener(
-      "click",
-      () => imgInput.click()
-    );
+  // 11. Password Generator
+  if (t.includes("password") || t.includes("పాస్వర్డ్")) {
+    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~";
+    let generated = "";
+    for (let i = 0; i < 12; i++) {
+      generated += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `Here is a secure password: ${generated}`;
   }
 
-  if (imgInput) {
-    imgInput.addEventListener(
-      "change",
-      () => {
-        const file =
-          imgInput.files?.[0];
-
-        if (file) {
-          handleImageFile(file);
-        }
-
-        imgInput.value = "";
-      }
-    );
+  // 12. Search
+  if (t.startsWith("search ") || t.startsWith("google ") || t.includes("వెతుకు")) {
+    const query = text.replace(/^(search|google|వెతుకు)/i, "").trim();
+    if (query) {
+      window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, "_blank");
+      return `Searching Google for "${query}", Boss.`;
+    }
   }
 
-  /* VOICE */
+  // 13. Open Apps / Websites
+  if (t.startsWith("open ") || t.startsWith("launch ")) {
+    const app = t.replace(/^(open|launch)\s+/i, "").trim();
+    const appTargets = {
+      youtube: "https://www.youtube.com",
+      google: "https://www.google.com",
+      gmail: "https://mail.google.com",
+      github: "https://www.github.com",
+      whatsapp: "https://web.whatsapp.com",
+      instagram: "https://www.instagram.com",
+      twitter: "https://twitter.com",
+      x: "https://x.com",
+      facebook: "https://www.facebook.com"
+    };
 
-  setupVoice();
-
-  /* VISIBILITY */
-
-  document.addEventListener(
-    "visibilitychange",
-    () => {
-      if (!document.hidden) {
-        msg.focus();
+    for (const key of Object.keys(appTargets)) {
+      if (app.includes(key)) {
+        window.open(appTargets[key], "_blank");
+        return `Opening ${key}, Boss.`;
       }
     }
-  );
-
-  /* PREVENT ACCIDENTAL FORM SUBMIT */
-
-  document.addEventListener(
-    "submit",
-    (event) => {
-      if (
-        event.target?.contains?.(msg)
-      ) {
-        event.preventDefault();
-      }
-    }
-  );
-
-  /* GLOBAL TEST FUNCTIONS */
-
-  window.handleTools = handleTools;
-  window.jarvisRun = runCommand;
-  window.jarvisSpeak = speak;
-
-  if (micBtn && !recognition) {
-    micBtn.setAttribute(
-      "title",
-      (
-        window.SpeechRecognition ||
-        window.webkitSpeechRecognition
-      )
-        ? "Activate voice input"
-        : "Voice input is not supported by this browser"
-    );
+    window.open(`https://${app.replace(/\s+/g, "")}.com`, "_blank");
+    return `Opening ${app}, Boss.`;
   }
-})();
-```0
+
+  // 14. Play Songs / YouTube
+  if (t.startsWith("play ") || t.includes("పాట") || t.includes("youtube")) {
+    const song = text.replace(/^(play|youtube|పాట)/i, "").trim();
+    if (song) {
+      window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(song)}`, "_blank");
+      return `Playing "${song}" on YouTube, Boss.`;
+    }
+  }
+
+  // 15. Crypto
+  if (t.includes("crypto") || t.includes("bitcoin") || t.includes("btc") || t.includes("eth") || t.includes("క్రిప్టో")) {
+    try {
+      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd,inr");
+      const data = await res.json();
+      return `Bitcoin is at $${data.bitcoin.usd.toLocaleString()} (₹${data.bitcoin.inr.toLocaleString()}) and Ethereum is at $${data.ethereum.usd.toLocaleString()} (₹${data.ethereum.inr.toLocaleString()}), Boss.`;
+    } catch {
+      return "Unable to fetch live crypto rates right now, Boss.";
+    }
+  }
+
+  return null; // Tool match not found, forward to AI Engine
+}
+
+// 6. Gemini AI Core Brain
+async function queryGemini(promptText, imageBase64 = null) {
+  if (!GEMINI_API_KEY) {
+    return "AI Engine offline: Please configure your Gemini API Key in script.js to activate autonomous conversational intelligence.";
+  }
+
+  const model = "gemini-1.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+  const parts = [];
+  if (imageBase64) {
+    parts.push({
+      inline_data: {
+        mime_type: "image/jpeg",
+        data: imageBase64
+      }
+    });
+  }
+  parts.push({
+    text: `You are J.A.R.V.I.S., an advanced AI assistant. Keep responses clear, polite, and address the user as Boss.\n\nUser: ${promptText}`
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts }] })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response received from core intelligence.";
+  } catch (error) {
+    return "Error communicating with the AI Engine. Please verify your connection and API configuration.";
+  }
+}
+
+// 7. Request Handler
+async function handleUserSubmission(rawText) {
+  const query = (rawText || msgInput.value).trim();
+  if (!query) return;
+
+  appendMessage("user", query);
+  msgInput.value = "";
+
+  // Check 15 Local Tools first
+  const toolResult = await handleTools(query);
+
+  if (toolResult) {
+    appendMessage("bot", toolResult);
+    speak(toolResult);
+  } else {
+    // Forward to Gemini Brain
+    const aiResponse = await queryGemini(query);
+    appendMessage("bot", aiResponse);
+    speak(aiResponse);
+  }
+}
+
+// 8. Event Listeners (Chat & UI)
+sendBtn.addEventListener("click", () => handleUserSubmission());
+
+msgInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    handleUserSubmission();
+  }
+});
+
+clearBtn.addEventListener("click", () => {
+  localStorage.removeItem("jarvis_chat_history");
+  chatHistory = [];
+  chatContainer.innerHTML = "";
+  appendMessage("bot", "Memory wiped. Ready for fresh instructions, Boss.");
+  speak("Memory cleared, Boss.");
+});
+
+// 9. Camera & Image Analysis
+camBtn.addEventListener("click", () => {
+  imgInput.click();
+});
+
+imgInput.addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const base64Data = reader.result.split(",")[1];
+    appendMessage("user", "[Uploaded an image for analysis]");
+    appendMessage("bot", "Scanning and analyzing the visual input, Boss...");
+    speak("Analyzing image, Boss.");
+
+    const analysis = await queryGemini("Describe and analyze this image in detail.", base64Data);
+    appendMessage("bot", analysis);
+    speak(analysis);
+  };
+  reader.readAsDataURL(file);
+});
