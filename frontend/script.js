@@ -32,7 +32,7 @@ async function handleTools(text){
 
   // 4. Translate
   if(t.includes('translate')){
-    const q=text.replace(/translate (this )?/i,'').trim()||'hello';
+    const q=text.replace(/translate (this) ?/i,'').trim()||'hello';
     try{
       const r=await fetch('https://api.mymemory.translated.net/get?q='+encodeURIComponent(q)+'&langpair=en|te');
       const d=await r.json();
@@ -41,7 +41,7 @@ async function handleTools(text){
   }
 
   // 5. YouTube Play
-  if(t.includes('play ')||t.includes('youtube ')){
+  if(t.includes('play')||t.includes('youtube')){
     const q=text.replace(/play |youtube (search )?/i,'').trim();
     if(q){
       window.open('https://www.youtube.com/results?search_query='+encodeURIComponent(q));
@@ -49,5 +49,5 @@ async function handleTools(text){
     }
   }
 
-  return null; // Tool match లేకపోతే Gemini Brain కి వెళ్తుంది
+  return null; // Tool match కాకపోతే Gemini Brain కి వెళ్తుంది
 }
