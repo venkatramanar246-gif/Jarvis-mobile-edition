@@ -1,19 +1,10 @@
 "use strict";
 
-(function () {
+(() => {
 
   /* =========================================================
-     J.A.R.V.I.S. — COMPLETE SCRIPT
+     J.A.R.V.I.S. SCRIPT
      PART 1 / 2
-
-     Existing HTML IDs preserved:
-     chat
-     msg
-     send
-     mic-btn
-     cam-btn
-     clear-btn
-     img-input
      ========================================================= */
 
   const chat = document.getElementById("chat");
@@ -25,104 +16,78 @@
   const imgInput = document.getElementById("img-input");
 
   if (!chat || !msg || !send) {
-    console.error("J.A.R.V.I.S.: Required HTML elements not found.");
+    console.error("JARVIS: Required HTML elements are missing.");
     return;
   }
 
   let recognition = null;
-  let isListening = false;
-  let isBusy = false;
-  let timerCounter = 0;
+  let listening = false;
+  let busy = false;
+  let timerNumber = 0;
 
-  const MEMORY_KEY = "JARVIS_MEMORY_V2";
+  const MEMORY_KEY = "JARVIS_MEMORY";
 
   /* =========================================================
-     BASIC HELPERS
+     HELPERS
      ========================================================= */
 
-  function clean(value) {
-    return String(value ?? "")
+  const clean = value =>
+    String(value ?? "")
       .replace(/\s+/g, " ")
       .trim();
-  }
 
-  function lower(value) {
-    return clean(value).toLowerCase();
-  }
-
-  function escapeHTML(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
+  const lower = value =>
+    clean(value).toLowerCase();
 
   function showChat() {
     chat.style.display = "block";
   }
 
-  /* =========================================================
-     CHAT BOX OUTPUT
-     ========================================================= */
-
-  function addMessage(sender, text, type) {
+  function addMessage(title, text, type = "") {
 
     showChat();
 
-    const wrapper = document.createElement("div");
+    const box = document.createElement("div");
 
-    wrapper.className =
-      "jarvis-message " +
-      (type || "");
+    box.className =
+      "jarvis-message " + type;
 
-    wrapper.style.margin = "10px 0";
-    wrapper.style.padding = "10px";
-    wrapper.style.borderRadius = "10px";
-    wrapper.style.whiteSpace = "pre-wrap";
-    wrapper.style.wordBreak = "break-word";
+    box.style.margin = "8px 0";
+    box.style.padding = "9px 12px";
+    box.style.borderRadius = "10px";
+    box.style.whiteSpace = "pre-wrap";
+    box.style.wordBreak = "break-word";
 
-    const title = document.createElement("div");
+    const name = document.createElement("div");
 
-    title.className = "jarvis-message-title";
-    title.textContent = sender;
+    name.textContent = title;
 
-    title.style.fontWeight = "700";
-    title.style.marginBottom = "4px";
+    name.style.fontWeight = "bold";
+    name.style.marginBottom = "4px";
 
-    const body = document.createElement("div");
+    const content = document.createElement("div");
 
-    body.className = "jarvis-message-text";
-    body.textContent = clean(text);
+    content.textContent = clean(text);
 
-    wrapper.appendChild(title);
-    wrapper.appendChild(body);
+    box.appendChild(name);
+    box.appendChild(content);
 
-    chat.appendChild(wrapper);
+    chat.appendChild(box);
 
     chat.scrollTop = chat.scrollHeight;
 
-    return wrapper;
+    return box;
   }
 
   function userMessage(text) {
-    return addMessage(
-      "YOU",
-      text,
-      "user-message"
-    );
+    addMessage("YOU", text, "user-message");
   }
 
   function jarvisMessage(text) {
-    return addMessage(
-      "J.A.R.V.I.S.",
-      text,
-      "assistant-message"
-    );
+    addMessage("J.A.R.V.I.S.", text, "assistant-message");
   }
 
-  function reply(text, shouldSpeak = true) {
+  function reply(text, speakIt = true) {
 
     const answer = clean(text);
 
@@ -130,12 +95,9 @@
 
     jarvisMessage(answer);
 
-    saveMemory(
-      "lastResponse",
-      answer
-    );
+    saveMemory("lastResponse", answer);
 
-    if (shouldSpeak) {
+    if (speakIt) {
       speak(answer);
     }
   }
@@ -147,13 +109,10 @@
   function getMemory() {
 
     try {
-
       return JSON.parse(
         localStorage.getItem(MEMORY_KEY) || "{}"
       );
-
-    } catch (error) {
-
+    } catch {
       return {};
     }
   }
@@ -171,35 +130,27 @@
         JSON.stringify(memory)
       );
 
-    } catch (error) {
-
-      console.warn(
-        "Memory save failed:",
-        error
-      );
+    } catch (e) {
+      console.warn("Memory error:", e);
     }
   }
 
-  function clearMemory(showResponse = true) {
+  function clearMemory() {
 
     try {
       localStorage.removeItem(MEMORY_KEY);
-    } catch (error) {}
+    } catch {}
 
-    if (chat) {
-      chat.innerHTML = "";
-      chat.style.display = "block";
-    }
+    chat.innerHTML = "";
+    showChat();
 
-    if (showResponse) {
-      reply(
-        "Memory cleared successfully, Boss."
-      );
-    }
+    reply(
+      "Memory cleared successfully, Boss."
+    );
   }
 
   /* =========================================================
-     SPEECH / TEXT TO SPEECH
+     SPEECH
      ========================================================= */
 
   function speak(text) {
@@ -210,21 +161,21 @@
 
     try {
 
-      window.speechSynthesis.cancel();
+      speechSynthesis.cancel();
 
-      const utterance =
+      const u =
         new SpeechSynthesisUtterance(
           clean(text)
         );
 
-      utterance.rate = 0.95;
-      utterance.pitch = 1;
-      utterance.volume = 1;
+      u.rate = 0.95;
+      u.pitch = 1;
+      u.volume = 1;
 
       const voices =
-        window.speechSynthesis.getVoices();
+        speechSynthesis.getVoices();
 
-      const preferred =
+      const voice =
         voices.find(v =>
           /en-IN/i.test(v.lang)
         ) ||
@@ -235,31 +186,25 @@
           /en-GB/i.test(v.lang)
         );
 
-      if (preferred) {
-        utterance.voice = preferred;
+      if (voice) {
+        u.voice = voice;
       }
 
-      window.speechSynthesis.speak(
-        utterance
-      );
+      speechSynthesis.speak(u);
 
-    } catch (error) {
-
-      console.warn(
-        "Speech synthesis error:",
-        error
-      );
+    } catch (e) {
+      console.warn("TTS error:", e);
     }
   }
 
   /* =========================================================
-     FETCH WITH TIMEOUT
+     SAFE FETCH
      ========================================================= */
 
-  async function fetchWithTimeout(
+  async function fetchJSON(
     url,
     options = {},
-    timeout = 15000
+    timeout = 12000
   ) {
 
     const controller =
@@ -273,13 +218,22 @@
 
     try {
 
-      return await fetch(
-        url,
-        {
-          ...options,
-          signal: controller.signal
-        }
-      );
+      const response =
+        await fetch(
+          url,
+          {
+            ...options,
+            signal: controller.signal
+          }
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          "HTTP " + response.status
+        );
+      }
+
+      return await response.json();
 
     } finally {
 
@@ -287,58 +241,11 @@
     }
   }
 
-  async function getJSON(
-    url,
-    options = {},
-    timeout = 15000
-  ) {
-
-    const response =
-      await fetchWithTimeout(
-        url,
-        options,
-        timeout
-      );
-
-    if (!response.ok) {
-      throw new Error(
-        "HTTP " + response.status
-      );
-    }
-
-    return await response.json();
-  }
-
   /* =========================================================
-     OPEN WEBSITE
+     01. TIME
      ========================================================= */
 
-  function openURL(url) {
-
-    try {
-
-      const newWindow =
-        window.open(
-          url,
-          "_blank",
-          "noopener,noreferrer"
-        );
-
-      if (!newWindow) {
-        window.location.href = url;
-      }
-
-    } catch (error) {
-
-      window.location.href = url;
-    }
-  }
-
-  /* =========================================================
-     01 — TIME
-     ========================================================= */
-
-  function toolTime() {
+  function getTime() {
 
     const now = new Date();
 
@@ -373,136 +280,133 @@
   }
 
   /* =========================================================
-     02 — WEATHER
+     02. WEATHER
      ========================================================= */
 
-  async function toolWeather() {
+  function getLocation() {
 
-    if (!navigator.geolocation) {
+    return new Promise(
+      (resolve, reject) => {
 
-      return (
-        "Your browser does not support location access."
-      );
-    }
+        if (!navigator.geolocation) {
+
+          reject(
+            new Error(
+              "Geolocation unavailable"
+            )
+          );
+
+          return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+          resolve,
+          reject,
+          {
+            enableHighAccuracy: false,
+            timeout: 10000,
+            maximumAge: 300000
+          }
+        );
+      }
+    );
+  }
+
+  function weatherText(code) {
+
+    const map = {
+
+      0: "Clear sky",
+      1: "Mainly clear",
+      2: "Partly cloudy",
+      3: "Overcast",
+
+      45: "Fog",
+      48: "Fog",
+
+      51: "Light drizzle",
+      53: "Moderate drizzle",
+      55: "Heavy drizzle",
+
+      61: "Light rain",
+      63: "Moderate rain",
+      65: "Heavy rain",
+
+      71: "Light snow",
+      73: "Moderate snow",
+      75: "Heavy snow",
+
+      80: "Light rain showers",
+      81: "Moderate rain showers",
+      82: "Heavy rain showers",
+
+      95: "Thunderstorm",
+      96: "Thunderstorm with hail",
+      99: "Thunderstorm with heavy hail"
+    };
+
+    return map[code] || "Unknown conditions";
+  }
+
+  async function getWeather() {
 
     try {
 
       const position =
-        await new Promise(
-          (resolve, reject) => {
+        await getLocation();
 
-            navigator.geolocation.getCurrentPosition(
-              resolve,
-              reject,
-              {
-                enableHighAccuracy: false,
-                timeout: 10000,
-                maximumAge: 300000
-              }
-            );
-          }
-        );
-
-      const latitude =
+      const lat =
         position.coords.latitude;
 
-      const longitude =
+      const lon =
         position.coords.longitude;
 
       const url =
         "https://api.open-meteo.com/v1/forecast" +
-        "?latitude=" +
-        encodeURIComponent(latitude) +
-        "&longitude=" +
-        encodeURIComponent(longitude) +
+        "?latitude=" + encodeURIComponent(lat) +
+        "&longitude=" + encodeURIComponent(lon) +
         "&current=" +
         "temperature_2m," +
-        "relative_humidity_2m," +
         "apparent_temperature," +
+        "relative_humidity_2m," +
         "wind_speed_10m," +
         "weather_code" +
         "&timezone=auto";
 
       const data =
-        await getJSON(url);
+        await fetchJSON(url);
 
-      const current =
-        data.current || {};
-
-      const temperature =
-        current.temperature_2m;
-
-      const feels =
-        current.apparent_temperature;
-
-      const humidity =
-        current.relative_humidity_2m;
-
-      const wind =
-        current.wind_speed_10m;
-
-      const description =
-        weatherDescription(
-          current.weather_code
-        );
+      const c =
+        data.current;
 
       return (
         "Current weather: " +
-        description +
+        weatherText(c.weather_code) +
         ". Temperature is " +
-        temperature +
-        "°C, feels like " +
-        feels +
+        c.temperature_2m +
+        "°C. Feels like " +
+        c.apparent_temperature +
         "°C. Humidity is " +
-        humidity +
+        c.relative_humidity_2m +
         "%. Wind speed is " +
-        wind +
+        c.wind_speed_10m +
         " km/h."
       );
 
-    } catch (error) {
+    } catch (e) {
 
       return (
-        "I could not access live weather. " +
+        "I could not get live weather. " +
         "Please allow location permission and try again."
       );
     }
   }
 
-  function weatherDescription(code) {
-
-    const map = {
-      0: "clear sky",
-      1: "mainly clear",
-      2: "partly cloudy",
-      3: "overcast",
-      45: "foggy",
-      48: "depositing rime fog",
-      51: "light drizzle",
-      53: "moderate drizzle",
-      55: "dense drizzle",
-      61: "light rain",
-      63: "moderate rain",
-      65: "heavy rain",
-      71: "light snow",
-      73: "moderate snow",
-      75: "heavy snow",
-      80: "light rain showers",
-      81: "moderate rain showers",
-      82: "violent rain showers",
-      95: "thunderstorm",
-      96: "thunderstorm with hail",
-      99: "thunderstorm with heavy hail"
-    };
-
-    return map[code] || "unknown conditions";
-  }
-
   /* =========================================================
-     03 — TIMER
+     03. TIMER
      ========================================================= */
 
-  function toolTimer(text) {
+  function createTimer(text) {
 
     const match =
       clean(text).match(
@@ -512,8 +416,8 @@
     if (!match) {
 
       return (
-        "Please specify a duration. " +
-        "For example: timer 10 seconds."
+        "Please specify the timer duration, for example: " +
+        "timer 10 seconds."
       );
     }
 
@@ -523,35 +427,37 @@
     const unit =
       match[2].toLowerCase();
 
-    let milliseconds = 1000;
+    let milliseconds;
 
-    if (
-      /minutes?|mins?/.test(unit)
-    ) {
-      milliseconds =
-        amount * 60 * 1000;
-    }
+    if (/hour|hr/.test(unit)) {
 
-    if (
-      /hours?|hrs?/.test(unit)
-    ) {
       milliseconds =
         amount * 60 * 60 * 1000;
+
+    } else if (/minute|min/.test(unit)) {
+
+      milliseconds =
+        amount * 60 * 1000;
+
+    } else {
+
+      milliseconds =
+        amount * 1000;
     }
 
-    const timerID =
-      ++timerCounter;
+    const id =
+      ++timerNumber;
 
     setTimeout(
-      function () {
+      () => {
 
-        const message =
+        const text =
           "Timer " +
-          timerID +
+          id +
           " is complete, Boss.";
 
-        jarvisMessage(message);
-        speak(message);
+        jarvisMessage(text);
+        speak(text);
 
       },
       milliseconds
@@ -559,7 +465,7 @@
 
     return (
       "Timer " +
-      timerID +
+      id +
       " set for " +
       amount +
       " " +
@@ -569,10 +475,10 @@
   }
 
   /* =========================================================
-     04 — DICE / COIN
+     04. DICE / COIN
      ========================================================= */
 
-  function toolDiceCoin(text) {
+  function diceCoin(text) {
 
     const t =
       lower(text);
@@ -621,7 +527,7 @@
       ) + 1;
 
     return (
-      "Dice roll result: " +
+      "Dice result: " +
       result +
       " out of " +
       sides +
@@ -630,22 +536,21 @@
   }
 
   /* =========================================================
-     05 — JOKE
+     05. JOKE
      ========================================================= */
 
-  async function toolJoke() {
+  async function getJoke() {
 
     try {
 
       const data =
-        await getJSON(
-          "https://v2.jokeapi.dev/joke/Any?safe-mode"
+        await fetchJSON(
+          "https://v2.jokeapi.dev/joke/Any?safe-mode",
+          {},
+          10000
         );
 
-      if (
-        data.type === "single"
-      ) {
-
+      if (data.type === "single") {
         return data.joke;
       }
 
@@ -661,7 +566,7 @@
         );
       }
 
-    } catch (error) {}
+    } catch {}
 
     return (
       "Why did the computer get cold? " +
@@ -670,16 +575,18 @@
   }
 
   /* =========================================================
-     06 — QUOTE
+     06. QUOTE
      ========================================================= */
 
-  async function toolQuote() {
+  async function getQuote() {
 
     try {
 
       const data =
-        await getJSON(
-          "https://dummyjson.com/quotes/random"
+        await fetchJSON(
+          "https://dummyjson.com/quotes/random",
+          {},
+          10000
         );
 
       if (data.quote) {
@@ -695,18 +602,18 @@
         );
       }
 
-    } catch (error) {}
+    } catch {}
 
     return (
-      "Success is built from small steps taken consistently, Boss."
+      "Success is built from small steps taken consistently."
     );
   }
 
   /* =========================================================
-     07 — NEWS
+     07. NEWS
      ========================================================= */
 
-  async function toolNews() {
+  async function getNews() {
 
     try {
 
@@ -720,10 +627,10 @@
         encodeURIComponent(rss);
 
       const data =
-        await getJSON(
+        await fetchJSON(
           url,
           {},
-          20000
+          15000
         );
 
       const items =
@@ -732,52 +639,41 @@
           : [];
 
       if (!items.length) {
-        throw new Error(
-          "No news"
-        );
+        throw new Error("No news");
       }
 
-      items.forEach(
-        function (item, index) {
-
-          const title =
-            clean(item.title);
-
-          if (title) {
-
-            addMessage(
-              "NEWS " + (index + 1),
-              title,
-              "news-message"
-            );
-          }
-        }
-      );
+      const headlines =
+        items
+          .map(
+            (item, i) =>
+              (i + 1) +
+              ". " +
+              clean(item.title)
+          )
+          .join("\n");
 
       return (
-        "Latest headlines loaded in the chat box."
+        "Latest headlines:\n" +
+        headlines
       );
 
-    } catch (error) {
+    } catch {
 
       return (
-        "Live news is temporarily unavailable. Please try again."
+        "Live news is temporarily unavailable. " +
+        "Please try again."
       );
     }
   }
 
   /* =========================================================
-     08 — TRANSLATE
+     08. TRANSLATE
      ========================================================= */
 
-  async function toolTranslate(text) {
+  async function translateText(text) {
 
     let query =
       clean(text)
-        .replace(
-          /^please\s+/i,
-          ""
-        )
         .replace(
           /^translate\s*/i,
           ""
@@ -786,18 +682,7 @@
           /^translation\s*/i,
           ""
         )
-        .replace(
-          /^అనువదించ\s*/i,
-          ""
-        )
         .trim();
-
-    if (!query) {
-
-      return (
-        "Tell me the sentence you want to translate."
-      );
-    }
 
     let target = "te";
 
@@ -808,10 +693,34 @@
       target = "en";
 
       query =
-        query.replace(
-          /\bto\s+english\b/i,
-          ""
-        ).trim();
+        query
+          .replace(
+            /\bto\s+english\b/i,
+            ""
+          )
+          .trim();
+    }
+
+    if (
+      /\bto\s+telugu\b/i.test(query)
+    ) {
+
+      target = "te";
+
+      query =
+        query
+          .replace(
+            /\bto\s+telugu\b/i,
+            ""
+          )
+          .trim();
+    }
+
+    if (!query) {
+
+      return (
+        "Tell me what you want to translate."
+      );
     }
 
     try {
@@ -824,10 +733,10 @@
         target;
 
       const data =
-        await getJSON(
+        await fetchJSON(
           url,
           {},
-          20000
+          15000
         );
 
       const result =
@@ -841,7 +750,7 @@
         );
       }
 
-    } catch (error) {}
+    } catch {}
 
     return (
       "Translation service is temporarily unavailable."
@@ -849,20 +758,20 @@
   }
 
   /* =========================================================
-     09 — CURRENCY
+     09. CURRENCY
      ========================================================= */
 
-  async function toolCurrency(text) {
+  async function currency(text) {
 
     const match =
       clean(text).match(
-        /(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s*(?:to|in|into)\s*([A-Za-z]{3})/i
+        /(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s*(?:to|into|in)\s*([A-Za-z]{3})/i
       );
 
     if (!match) {
 
       return (
-        "Use the format: 100 USD to INR."
+        "Use this format: 100 USD to INR."
       );
     }
 
@@ -878,11 +787,11 @@
     try {
 
       const data =
-        await getJSON(
+        await fetchJSON(
           "https://open.er-api.com/v6/latest/" +
           encodeURIComponent(from),
           {},
-          15000
+          12000
         );
 
       const rate =
@@ -891,48 +800,45 @@
       if (
         typeof rate !== "number"
       ) {
-
-        throw new Error(
-          "Rate unavailable"
-        );
+        throw new Error("No rate");
       }
 
-      const converted =
+      const result =
         amount * rate;
 
       return (
         amount +
         " " +
         from +
-        " is approximately " +
-        converted.toFixed(2) +
+        " = " +
+        result.toFixed(2) +
         " " +
         to +
-        "."
+        " at the current available exchange rate."
       );
 
-    } catch (error) {
+    } catch {
 
       return (
-        "I could not retrieve the live exchange rate."
+        "I could not retrieve the live exchange rate right now."
       );
     }
   }
 
   /* =========================================================
-     10 — MEANING
+     10. MEANING
      ========================================================= */
 
-  async function toolMeaning(text) {
+  async function meaning(text) {
 
     let word =
       clean(text)
         .replace(
-          /what\s+is\s+the\s+meaning\s+of/i,
+          /^what\s+is\s+the\s+meaning\s+of\s*/i,
           ""
         )
         .replace(
-          /meaning\s+of/i,
+          /^meaning\s+of\s*/i,
           ""
         )
         .replace(
@@ -956,34 +862,37 @@
     if (!word) {
 
       return (
-        "Please tell me the word you want the meaning of."
+        "Tell me the word you want the meaning of."
       );
     }
 
     try {
 
       const data =
-        await getJSON(
+        await fetchJSON(
           "https://api.dictionaryapi.dev/api/v2/entries/en/" +
-          encodeURIComponent(word)
+          encodeURIComponent(word),
+          {},
+          10000
         );
 
+      const m =
+        data?.[0]?.meanings?.[0];
+
       const definition =
-        data?.[0]
-          ?.meanings?.[0]
-          ?.definitions?.[0]
-          ?.definition;
+        m?.definitions?.[0]?.definition;
 
       const example =
-        data?.[0]
-          ?.meanings?.[0]
-          ?.definitions?.[0]
-          ?.example;
+        m?.definitions?.[0]?.example;
+
+      const part =
+        m?.partOfSpeech;
 
       if (definition) {
 
         return (
           word +
+          (part ? " (" + part + ")" : "") +
           " means: " +
           definition +
           (
@@ -994,20 +903,19 @@
         );
       }
 
-    } catch (error) {}
+    } catch {}
 
     return (
-      "I could not find a definition for " +
+      "I could not find a dictionary definition for " +
       word +
       "."
     );
   }
-
-  /* =========================================================
-     11 — PASSWORD
+    /* =========================================================
+     11. PASSWORD
      ========================================================= */
 
-  function toolPassword(text) {
+  function generatePassword(text) {
 
     const match =
       clean(text).match(
@@ -1023,10 +931,10 @@
         )
       );
 
-    const uppercase =
+    const upper =
       "ABCDEFGHJKLMNPQRSTUVWXYZ";
 
-    const lowercase =
+    const lowerChars =
       "abcdefghijkmnopqrstuvwxyz";
 
     const numbers =
@@ -1035,9 +943,9 @@
     const symbols =
       "!@#$%^&*_-+=";
 
-    const chars =
-      uppercase +
-      lowercase +
+    const all =
+      upper +
+      lowerChars +
       numbers +
       symbols;
 
@@ -1062,8 +970,8 @@
       ) {
 
         password +=
-          chars[
-            values[i] % chars.length
+          all[
+            values[i] % all.length
           ];
       }
 
@@ -1076,39 +984,42 @@
       ) {
 
         password +=
-          chars[
+          all[
             Math.floor(
-              Math.random() *
-              chars.length
+              Math.random() * all.length
             )
           ];
       }
     }
 
     return (
-      "Generated password: " +
+      "Generated secure password: " +
       password
     );
   }
 
   /* =========================================================
-     12 — SEARCH
+     12. SEARCH
      ========================================================= */
 
-  function toolSearch(text) {
+  function webSearch(text) {
 
-    const query =
+    let query =
       clean(text)
         .replace(
-          /^please\s+/i,
+          /^search\s+for\s+/i,
           ""
         )
         .replace(
-          /^search\s*(for)?\s*/i,
+          /^search\s+/i,
           ""
         )
         .replace(
-          /^వెతుకు\s*/i,
+          /^google\s+/i,
+          ""
+        )
+        .replace(
+          /^look\s+up\s+/i,
           ""
         )
         .trim();
@@ -1116,13 +1027,18 @@
     if (!query) {
 
       return (
-        "Tell me what you want me to search for."
+        "Tell me what you want to search for."
       );
     }
 
-    openURL(
+    const url =
       "https://www.google.com/search?q=" +
-      encodeURIComponent(query)
+      encodeURIComponent(query);
+
+    window.open(
+      url,
+      "_blank",
+      "noopener,noreferrer"
     );
 
     return (
@@ -1132,10 +1048,10 @@
   }
 
   /* =========================================================
-     13 — OPEN APPS
+     13. OPEN APPS
      ========================================================= */
 
-  function toolOpenApps(text) {
+  function openApp(text) {
 
     const t =
       lower(text);
@@ -1177,23 +1093,26 @@
 
       chatgpt:
         "https://chatgpt.com/"
-
     };
 
     for (
-      const app in apps
+      const name in apps
     ) {
 
       if (
-        t.includes(app)
+        t.includes(name)
       ) {
 
-        openURL(apps[app]);
+        window.open(
+          apps[name],
+          "_blank",
+          "noopener,noreferrer"
+        );
 
         return (
           "Opening " +
-          app +
-          "."
+          name +
+          ", Boss."
         );
       }
     }
@@ -1204,10 +1123,10 @@
   }
 
   /* =========================================================
-     14 — PLAY SONGS / YOUTUBE
+     14. PLAY SONGS
      ========================================================= */
 
-  function toolPlaySong(text) {
+  function playSong(text) {
 
     let query =
       clean(text)
@@ -1231,32 +1150,35 @@
 
     if (!query) {
 
-      openURL(
-        "https://www.youtube.com/"
+      window.open(
+        "https://www.youtube.com/",
+        "_blank",
+        "noopener,noreferrer"
       );
 
       return (
-        "Opening YouTube, Boss."
+        "Opening YouTube."
       );
     }
 
-    openURL(
+    window.open(
       "https://www.youtube.com/results?search_query=" +
-      encodeURIComponent(query)
+      encodeURIComponent(query),
+      "_blank",
+      "noopener,noreferrer"
     );
 
     return (
-      "Searching YouTube for " +
-      query +
-      "."
+      "Searching YouTube for: " +
+      query
     );
   }
 
   /* =========================================================
-     15 — CRYPTO
+     15. CRYPTO
      ========================================================= */
 
-  async function toolCrypto(text) {
+  async function cryptoPrice(text) {
 
     const t =
       lower(text);
@@ -1275,15 +1197,14 @@
       solana: "solana",
       sol: "solana",
 
-      xrp: "ripple",
       ripple: "ripple",
+      xrp: "ripple",
 
       cardano: "cardano",
       ada: "cardano"
-
     };
 
-    let coinID = "bitcoin";
+    let coin = "bitcoin";
 
     for (
       const key in coins
@@ -1293,7 +1214,7 @@
         t.includes(key)
       ) {
 
-        coinID =
+        coin =
           coins[key];
 
         break;
@@ -1303,136 +1224,125 @@
     try {
 
       const data =
-        await getJSON(
+        await fetchJSON(
           "https://api.coingecko.com/api/v3/simple/price" +
           "?ids=" +
-          encodeURIComponent(coinID) +
+          encodeURIComponent(coin) +
           "&vs_currencies=usd,inr" +
           "&include_24hr_change=true",
           {},
-          20000
+          15000
         );
 
-      const coin =
-        data?.[coinID];
+      const item =
+        data?.[coin];
 
-      if (!coin) {
-        throw new Error(
-          "Crypto unavailable"
-        );
+      if (!item) {
+        throw new Error("No data");
       }
 
-      let result =
-        coinID +
-        " price is $" +
+      let answer =
+        coin.toUpperCase() +
+        " current price: $" +
         Number(
-          coin.usd
+          item.usd
         ).toLocaleString();
 
       if (
-        typeof coin.inr === "number"
+        typeof item.inr === "number"
       ) {
 
-        result +=
-          " or ₹" +
+        answer +=
+          " | ₹" +
           Number(
-            coin.inr
+            item.inr
           ).toLocaleString();
       }
 
       if (
-        typeof coin.usd_24h_change ===
+        typeof item.usd_24h_change ===
         "number"
       ) {
 
-        result +=
-          ". 24-hour change: " +
-          coin.usd_24h_change.toFixed(2) +
+        answer +=
+          " | 24h change: " +
+          item.usd_24h_change.toFixed(2) +
           "%";
       }
 
-      return result + ".";
+      return answer + ".";
 
-    } catch (error) {
+    } catch {
 
       return (
-        "Live crypto data is temporarily unavailable."
+        "Live cryptocurrency data is temporarily unavailable."
       );
     }
   }
-    /* =========================================================
-     PART 2 / 2
-     ========================================================= */
 
   /* =========================================================
-     FEATURE COMMAND DETECTOR
+     EXACT TOOL ROUTER
      ========================================================= */
 
-  async function handleTools(text) {
+  async function runTool(text) {
 
     const t =
       lower(text);
 
-    /* 01 TIME */
+    /* TIME */
 
     if (
       t === "time" ||
       t.includes("what time") ||
       t.includes("current time") ||
       t.includes("tell me the time") ||
-      t.includes("టైమ్") ||
-      t.includes("సమయం")
+      t.includes("సమయం") ||
+      t.includes("టైమ్")
     ) {
-
-      return toolTime();
+      return getTime();
     }
 
 
-    /* 02 WEATHER */
+    /* WEATHER */
 
     if (
       t.includes("weather") ||
       t.includes("temperature") ||
       t.includes("forecast") ||
       t.includes("వాతావరణం") ||
-      t.includes("టెంపరేచర్")
+      t.includes("వెదర్")
     ) {
-
-      return await toolWeather();
+      return await getWeather();
     }
 
 
-    /* 03 TIMER */
+    /* TIMER */
 
     if (
       t.includes("timer") ||
       t.includes("set timer") ||
-      t.includes("alarm") ||
       t.includes("టైమర్")
     ) {
-
-      return toolTimer(text);
+      return createTimer(text);
     }
 
 
-    /* 04 DICE / COIN */
+    /* DICE / COIN */
 
     if (
       t.includes("dice") ||
-      t.includes("roll dice") ||
-      t.includes("roll a dice") ||
+      t.includes("roll") ||
       t.includes("coin") ||
       t.includes("flip coin") ||
       t.includes("toss coin") ||
       t.includes("డైస్") ||
       t.includes("కాయిన్")
     ) {
-
-      return toolDiceCoin(text);
+      return diceCoin(text);
     }
 
 
-    /* 05 JOKE */
+    /* JOKE */
 
     if (
       t === "joke" ||
@@ -1441,12 +1351,11 @@
       t.includes("joke please") ||
       t.includes("జోక్")
     ) {
-
-      return await toolJoke();
+      return await getJoke();
     }
 
 
-    /* 06 QUOTE */
+    /* QUOTE */
 
     if (
       t === "quote" ||
@@ -1454,30 +1363,27 @@
       t.includes("motivational quote") ||
       t.includes("motivation") ||
       t.includes("inspiration") ||
-      t.includes("కోట్") ||
-      t.includes("మోటివేషన్")
+      t.includes("కోట్")
     ) {
-
-      return await toolQuote();
+      return await getQuote();
     }
 
 
-    /* 07 NEWS */
+    /* NEWS */
 
     if (
       t === "news" ||
       t.includes("latest news") ||
       t.includes("today news") ||
-      t.includes("headlines") ||
       t.includes("latest headlines") ||
+      t.includes("headlines") ||
       t.includes("వార్తలు")
     ) {
-
-      return await toolNews();
+      return await getNews();
     }
 
 
-    /* 08 TRANSLATE */
+    /* TRANSLATE */
 
     if (
       t.startsWith("translate ") ||
@@ -1485,43 +1391,39 @@
       t.includes("translate this") ||
       t.includes("translate to english") ||
       t.includes("translate to telugu") ||
-      t.includes("అనువదించ") ||
-      t.includes("ట్రాన్స్‌లేట్")
+      t.includes("అనువదించ")
     ) {
-
-      return await toolTranslate(text);
+      return await translateText(text);
     }
 
 
-    /* 09 CURRENCY */
+    /* CURRENCY */
 
     if (
       t.includes("currency") ||
       t.includes("exchange rate") ||
       t.includes("convert currency") ||
-      /\d+(?:\.\d+)?\s*[a-z]{3}\s+(?:to|in|into)\s*[a-z]{3}/i.test(text)
+      /\d+(?:\.\d+)?\s*[a-z]{3}\s+(?:to|into|in)\s*[a-z]{3}/i.test(text)
     ) {
-
-      return await toolCurrency(text);
+      return await currency(text);
     }
 
 
-    /* 10 MEANING */
+    /* MEANING */
 
     if (
       t.includes("meaning of") ||
-      t.includes("what does") ||
-      t.startsWith("define ") ||
+      t.includes("what is the meaning") ||
+      t.includes("define ") ||
       t.includes("definition of") ||
       t.includes("dictionary") ||
       t.includes("అర్థం")
     ) {
-
-      return await toolMeaning(text);
+      return await meaning(text);
     }
 
 
-    /* 11 PASSWORD */
+    /* PASSWORD */
 
     if (
       t.includes("password") ||
@@ -1530,27 +1432,24 @@
       t.includes("create password") ||
       t.includes("పాస్‌వర్డ్")
     ) {
-
-      return toolPassword(text);
+      return generatePassword(text);
     }
 
 
-    /* 12 SEARCH */
+    /* SEARCH */
 
     if (
       t === "search" ||
       t.startsWith("search ") ||
-      t.startsWith("search for ") ||
       t.startsWith("google ") ||
       t.startsWith("look up ") ||
       t.startsWith("వెతుకు ")
     ) {
-
-      return toolSearch(text);
+      return webSearch(text);
     }
 
 
-    /* 13 OPEN APPS */
+    /* OPEN APP */
 
     if (
       t.startsWith("open ") ||
@@ -1567,12 +1466,11 @@
       t.includes("open drive") ||
       t.includes("open chatgpt")
     ) {
-
-      return toolOpenApps(text);
+      return openApp(text);
     }
 
 
-    /* 14 PLAY SONGS */
+    /* PLAY SONG */
 
     if (
       t.startsWith("play ") ||
@@ -1581,12 +1479,11 @@
       t.includes("youtube") ||
       t.includes("పాట")
     ) {
-
-      return toolPlaySong(text);
+      return playSong(text);
     }
 
 
-    /* 15 CRYPTO */
+    /* CRYPTO */
 
     if (
       t.includes("crypto") ||
@@ -1603,134 +1500,42 @@
       t.includes("ada") ||
       t.includes("క్రిప్టో")
     ) {
-
-      return await toolCrypto(text);
+      return await cryptoPrice(text);
     }
 
 
     return null;
   }
 
-
   /* =========================================================
-     LOCAL CHAT FALLBACK
+     AI FALLBACK
      ========================================================= */
 
-  function localAI(text) {
-
-    const t =
-      lower(text);
-
-    if (
-      t === "hi" ||
-      t === "hello" ||
-      t === "hey" ||
-      t.includes("good morning") ||
-      t.includes("good evening") ||
-      t.includes("good afternoon")
-    ) {
-
-      return (
-        "Hello, Boss. J.A.R.V.I.S. is online and ready."
-      );
-    }
-
-
-    if (
-      t.includes("who are you") ||
-      t.includes("what are you")
-    ) {
-
-      return (
-        "I am J.A.R.V.I.S., your personal AI assistant."
-      );
-    }
-
-
-    if (
-      t.includes("how are you")
-    ) {
-
-      return (
-        "All systems are operational, Boss."
-      );
-    }
-
-
-    if (
-      t.includes("thank you") ||
-      t === "thanks" ||
-      t.includes("thank")
-    ) {
-
-      return (
-        "You're welcome, Boss."
-      );
-    }
-
-
-    if (
-      t.includes("what can you do") ||
-      t === "help" ||
-      t.includes("help me")
-    ) {
-
-      return (
-        "I can handle time, weather, timers, dice, coin tosses, jokes, quotes, news, translation, currency conversion, word meanings, password generation, web search, apps, songs, cryptocurrency, voice input, image analysis, memory and AI chat."
-      );
-    }
-
-
-    return (
-      "I received your command: " +
-      text +
-      "."
-    );
-  }
-
-
-  /* =========================================================
-     AI CHAT
-     ========================================================= */
-
-  async function askAI(text) {
+  async function aiFallback(text) {
 
     const memory =
       getMemory();
 
     const prompt =
-      "You are J.A.R.V.I.S., a helpful personal AI assistant. " +
-      "Answer the user's question clearly and naturally. " +
-      "Do not pretend that you performed an action you did not perform. " +
-      "Keep normal answers concise.\n\n" +
-      "Previous J.A.R.V.I.S. response: " +
-      (
-        memory.lastResponse ||
-        "None"
-      ) +
-      "\n\nUser: " +
-      text;
-
-
-    /*
-      Online AI fallback.
-      If it is unavailable, localAI() keeps
-      the chat button functional.
-    */
+      "You are J.A.R.V.I.S., a personal AI assistant. " +
+      "Give a direct, accurate and concise answer. " +
+      "Do not claim to have performed actions that you did not perform. " +
+      "User question: " +
+      text +
+      "\nPrevious response: " +
+      (memory.lastResponse || "None");
 
     try {
 
       const response =
-        await fetchWithTimeout(
+        await fetch(
           "https://text.pollinations.ai/",
           {
             method: "POST",
-
             headers: {
               "Content-Type":
                 "application/json"
             },
-
             body:
               JSON.stringify({
                 messages: [
@@ -1740,25 +1545,20 @@
                   }
                 ]
               })
-          },
-          20000
+          }
         );
 
       if (!response.ok) {
-        throw new Error(
-          "AI request failed"
-        );
+        throw new Error("AI unavailable");
       }
 
-      const contentType =
+      const type =
         response.headers.get(
           "content-type"
         ) || "";
 
       if (
-        contentType.includes(
-          "application/json"
-        )
+        type.includes("application/json")
       ) {
 
         const data =
@@ -1768,8 +1568,7 @@
           data?.choices?.[0]
             ?.message?.content ||
           data?.response ||
-          data?.text ||
-          data?.output;
+          data?.text;
 
         if (answer) {
           return clean(answer);
@@ -1785,17 +1584,19 @@
         }
       }
 
-    } catch (error) {
+    } catch (e) {
 
       console.warn(
-        "Online AI unavailable:",
-        error
+        "AI fallback unavailable:",
+        e
       );
     }
 
-    return localAI(text);
+    return (
+      "I can handle your J.A.R.V.I.S. tools. " +
+      "For a general question, please try again."
+    );
   }
-
 
   /* =========================================================
      IMAGE ANALYSIS
@@ -1804,7 +1605,6 @@
   async function analyzeImage(file) {
 
     if (!file) {
-
       throw new Error(
         "No image selected."
       );
@@ -1813,9 +1613,8 @@
     if (
       !file.type.startsWith("image/")
     ) {
-
       throw new Error(
-        "Please select a valid image."
+        "Please select an image file."
       );
     }
 
@@ -1834,16 +1633,13 @@
           reader.onerror =
             () => reject(
               new Error(
-                "Unable to read the image."
+                "Could not read image."
               )
             );
 
-          reader.readAsDataURL(
-            file
-          );
+          reader.readAsDataURL(file);
         }
       );
-
 
     const dimensions =
       await new Promise(
@@ -1872,14 +1668,7 @@
         }
       );
 
-
     let detectedText = "";
-
-    /*
-      OCR is attempted so the image button
-      has useful functionality without
-      requiring another HTML element.
-    */
 
     try {
 
@@ -1907,13 +1696,12 @@
       );
 
       const response =
-        await fetchWithTimeout(
+        await fetch(
           "https://api.ocr.space/parse/image",
           {
             method: "POST",
             body: form
-          },
-          20000
+          }
         );
 
       if (response.ok) {
@@ -1925,81 +1713,99 @@
           clean(
             (data.ParsedResults || [])
               .map(
-                item =>
-                  item.ParsedText || ""
+                x =>
+                  x.ParsedText || ""
               )
               .join(" ")
           );
       }
 
-    } catch (error) {
+    } catch (e) {
 
       console.warn(
         "OCR unavailable:",
-        error
+        e
       );
     }
 
-
     let result =
       "Image analysis complete. " +
-      "Image size: " +
+      "Resolution: " +
       dimensions.width +
       " × " +
       dimensions.height +
       ".";
 
-
     if (detectedText) {
 
       result +=
-        " Detected text: " +
+        "\nDetected text: " +
         detectedText.substring(
           0,
-          1500
+          2000
         );
 
     } else {
 
       result +=
-        " I could not detect readable text in this image.";
+        "\nNo readable text was detected.";
     }
 
     return result;
   }
 
+  /* =========================================================
+     IMAGE BUTTON
+     ========================================================= */
 
-  async function handleImage(file) {
+  if (camBtn && imgInput) {
 
-    if (!file) return;
+    camBtn.addEventListener(
+      "click",
+      event => {
 
-    userMessage(
-      "Analyze image: " +
-      file.name
+        event.preventDefault();
+
+        imgInput.click();
+      }
     );
-
-    setBusy(true);
-
-    try {
-
-      const result =
-        await analyzeImage(file);
-
-      reply(result);
-
-    } catch (error) {
-
-      reply(
-        error.message ||
-        "Image analysis failed."
-      );
-
-    } finally {
-
-      setBusy(false);
-    }
   }
 
+  if (imgInput) {
+
+    imgInput.addEventListener(
+      "change",
+      async () => {
+
+        const file =
+          imgInput.files?.[0];
+
+        if (!file) return;
+
+        userMessage(
+          "Analyze image: " +
+          file.name
+        );
+
+        try {
+
+          const result =
+            await analyzeImage(file);
+
+          reply(result);
+
+        } catch (e) {
+
+          reply(
+            e.message ||
+            "Image analysis failed."
+          );
+        }
+
+        imgInput.value = "";
+      }
+    );
+  }
 
   /* =========================================================
      VOICE INPUT
@@ -2013,22 +1819,20 @@
       window.SpeechRecognition ||
       window.webkitSpeechRecognition;
 
-
     if (!SpeechRecognition) {
 
       micBtn.addEventListener(
         "click",
-        function () {
+        () => {
 
           reply(
-            "Voice input is not supported by this browser. Please use a browser with Speech Recognition support."
+            "Voice input is not supported in this browser."
           );
         }
       );
 
       return;
     }
-
 
     recognition =
       new SpeechRecognition();
@@ -2045,11 +1849,10 @@
     recognition.maxAlternatives =
       1;
 
-
     recognition.onstart =
-      function () {
+      () => {
 
-        isListening = true;
+        listening = true;
 
         micBtn.classList.add(
           "listening"
@@ -2061,47 +1864,31 @@
         );
       };
 
-
     recognition.onresult =
-      function (event) {
+      event => {
 
         const transcript =
-          event?.results?.[0]?.[0]
-            ?.transcript || "";
+          event.results?.[0]?.[0]
+            ?.transcript;
 
-        if (!transcript) {
-          return;
-        }
+        if (!transcript) return;
 
         msg.value =
-          transcript;
+          clean(transcript);
 
         setTimeout(
-          function () {
-            runCommand();
-          },
-          100
+          runCommand,
+          50
         );
       };
 
-
     recognition.onerror =
-      function (event) {
+      event => {
 
-        console.warn(
-          "Speech recognition error:",
-          event.error
-        );
-
-        isListening = false;
+        listening = false;
 
         micBtn.classList.remove(
           "listening"
-        );
-
-        micBtn.setAttribute(
-          "aria-label",
-          "Activate voice input"
         );
 
         if (
@@ -2115,11 +1902,10 @@
         }
       };
 
-
     recognition.onend =
-      function () {
+      () => {
 
-        isListening = false;
+        listening = false;
 
         micBtn.classList.remove(
           "listening"
@@ -2131,136 +1917,105 @@
         );
       };
 
-
     micBtn.addEventListener(
       "click",
-      function (event) {
+      event => {
 
         event.preventDefault();
 
         try {
 
-          if (isListening) {
-
+          if (listening) {
             recognition.stop();
-
           } else {
-
             recognition.start();
           }
 
-        } catch (error) {
-
+        } catch (e) {
           console.warn(
-            "Voice start error:",
-            error
+            "Recognition error:",
+            e
           );
         }
       }
     );
   }
 
-
   /* =========================================================
-     BUSY STATE
-     ========================================================= */
-
-  function setBusy(state) {
-
-    isBusy = state;
-
-    if (send) {
-
-      send.disabled = state;
-
-      send.textContent =
-        state
-          ? "WAIT..."
-          : "EXECUTE";
-    }
-  }
-
-
-  /* =========================================================
-     MAIN COMMAND
+     MAIN EXECUTION
      ========================================================= */
 
   async function runCommand() {
 
-    if (isBusy) {
-      return;
-    }
+    if (busy) return;
 
     const text =
       clean(msg.value);
 
-    if (!text) {
-      return;
-    }
-
-    /*
-      FIRST SHOW COMMAND IN CHAT BOX.
-    */
+    if (!text) return;
 
     userMessage(text);
 
     msg.value = "";
 
-    setBusy(true);
+    busy = true;
+
+    send.disabled = true;
+    send.textContent = "WAIT...";
 
     try {
 
       /*
-        LOCAL TOOLS FIRST.
-        This makes the 15 tools work without
-        waiting for an AI response.
-      */
+       * IMPORTANT:
+       * Screenshot features are handled FIRST.
+       * Therefore they do not get random AI answers.
+       */
 
-      const toolResult =
-        await handleTools(text);
-
+      const toolAnswer =
+        await runTool(text);
 
       if (
-        toolResult !== null &&
-        toolResult !== undefined
+        toolAnswer !== null &&
+        toolAnswer !== undefined
       ) {
 
-        reply(toolResult);
+        reply(toolAnswer);
 
         return;
       }
 
-
       /*
-        UNKNOWN COMMAND -> AI CHAT
-      */
+       * Only unknown/general questions reach AI.
+       */
 
       const answer =
-        await askAI(text);
+        await aiFallback(text);
 
       reply(answer);
 
     } catch (error) {
 
       console.error(
-        "J.A.R.V.I.S. command error:",
+        "JARVIS error:",
         error
       );
 
       reply(
-        "I encountered an error while processing that command. Please try again."
+        "Sorry Boss, I could not complete that command."
       );
 
     } finally {
 
-      setBusy(false);
+      busy = false;
+
+      send.disabled = false;
+      send.textContent = "EXECUTE";
 
       try {
         msg.focus();
-      } catch (error) {}
+      } catch {}
     }
   }
-
 
   /* =========================================================
      EXECUTE BUTTON
@@ -2268,7 +2023,7 @@
 
   send.addEventListener(
     "click",
-    function (event) {
+    event => {
 
       event.preventDefault();
 
@@ -2276,14 +2031,13 @@
     }
   );
 
-
   /* =========================================================
      ENTER KEY
      ========================================================= */
 
   msg.addEventListener(
     "keydown",
-    function (event) {
+    event => {
 
       if (
         event.key === "Enter" &&
@@ -2297,7 +2051,6 @@
     }
   );
 
-
   /* =========================================================
      CLEAR MEMORY
      ========================================================= */
@@ -2306,7 +2059,7 @@
 
     clearBtn.addEventListener(
       "click",
-      function (event) {
+      event => {
 
         event.preventDefault();
 
@@ -2315,71 +2068,73 @@
     );
   }
 
-
   /* =========================================================
-     CAMERA / IMAGE
-     ========================================================= */
-
-  if (
-    camBtn &&
-    imgInput
-  ) {
-
-    camBtn.addEventListener(
-      "click",
-      function (event) {
-
-        event.preventDefault();
-
-        imgInput.click();
-      }
-    );
-  }
-
-
-  if (imgInput) {
-
-    imgInput.addEventListener(
-      "change",
-      function () {
-
-        const file =
-          this.files?.[0];
-
-        if (file) {
-          handleImage(file);
-        }
-
-        /*
-          Allows selecting the same image
-          again after analysis.
-        */
-
-        this.value = "";
-      }
-    );
-  }
-
-
-  /* =========================================================
-     FEATURE BOX CLICK SUPPORT
-     =========================================================
-
-     Your screenshot shows 15 feature cards.
-     If the cards do not have IDs, this detects
-     their visible text and makes them clickable.
-     Existing HTML/CSS is not changed.
+     FEATURE CARDS
      ========================================================= */
 
   function setupFeatureCards() {
 
-    const all =
+    const commands = {
+
+      "time":
+        "what is the time",
+
+      "weather":
+        "weather",
+
+      "timer":
+        "timer 10 seconds",
+
+      "dice / coin":
+        "roll dice",
+
+      "dice":
+        "roll dice",
+
+      "coin":
+        "flip coin",
+
+      "joke":
+        "tell me a joke",
+
+      "quote":
+        "give me a quote",
+
+      "news":
+        "latest news",
+
+      "translate":
+        "translate hello",
+
+      "currency":
+        "100 USD to INR",
+
+      "meaning":
+        "meaning of assistant",
+
+      "password":
+        "generate password",
+
+      "search":
+        "search Google",
+
+      "open apps":
+        "open Google",
+
+      "play songs":
+        "play music",
+
+      "crypto":
+        "bitcoin price"
+    };
+
+    const elements =
       document.querySelectorAll(
         "body *"
       );
 
-    all.forEach(
-      function (element) {
+    elements.forEach(
+      element => {
 
         if (
           element.children.length > 0
@@ -2387,129 +2142,44 @@
           return;
         }
 
-        const text =
-          clean(element.textContent);
-
-        if (!text) return;
-
-        const commandMap = [
-
-          {
-            words: ["Time"],
-            command: "what is the time"
-          },
-
-          {
-            words: ["Weather"],
-            command: "weather"
-          },
-
-          {
-            words: ["Timer"],
-            command: "timer 10 seconds"
-          },
-
-          {
-            words: ["Dice / Coin", "Dice", "Coin"],
-            command: "roll dice"
-          },
-
-          {
-            words: ["Joke"],
-            command: "tell me a joke"
-          },
-
-          {
-            words: ["Quote"],
-            command: "give me a motivational quote"
-          },
-
-          {
-            words: ["News"],
-            command: "latest news"
-          },
-
-          {
-            words: ["Translate"],
-            command: "translate hello"
-          },
-
-          {
-            words: ["Currency"],
-            command: "100 USD to INR"
-          },
-
-          {
-            words: ["Meaning"],
-            command: "meaning of assistant"
-          },
-
-          {
-            words: ["Password"],
-            command: "generate password"
-          },
-
-          {
-            words: ["Search"],
-            command: "search Google"
-          },
-
-          {
-            words: ["Open Apps"],
-            command: "open Google"
-          },
-
-          {
-            words: ["Play Songs"],
-            command: "play music"
-          },
-
-          {
-            words: ["Crypto"],
-            command: "bitcoin price"
-          }
-
-        ];
-
-
-        for (
-          const item of commandMap
-        ) {
-
-          const matched =
-            item.words.some(
-              word =>
-                text.toLowerCase() ===
-                word.toLowerCase()
-            );
-
-          if (!matched) {
-            continue;
-          }
-
-
-          element.style.cursor =
-            "pointer";
-
-
-          element.addEventListener(
-            "click",
-            function () {
-
-              msg.value =
-                item.command;
-
-              runCommand();
-            }
+        const label =
+          lower(
+            element.textContent
           );
 
-
-          break;
+        if (!commands[label]) {
+          return;
         }
+
+        element.style.cursor =
+          "pointer";
+
+        element.addEventListener(
+          "click",
+          event => {
+
+            /*
+             * Do not interfere with normal
+             * buttons/input controls.
+             */
+
+            if (
+              event.target.closest(
+                "button,input"
+              )
+            ) {
+              return;
+            }
+
+            msg.value =
+              commands[label];
+
+            runCommand();
+          }
+        );
       }
     );
   }
-
 
   /* =========================================================
      STARTUP
@@ -2518,11 +2188,6 @@
   setupVoice();
 
   setupFeatureCards();
-
-
-  /* =========================================================
-     GLOBAL ACCESS
-     ========================================================= */
 
   window.jarvisRun =
     runCommand;
@@ -2534,28 +2199,17 @@
     clearMemory;
 
   window.jarvisAnalyzeImage =
-    handleImage;
+    analyzeImage;
 
-  window.jarvisTools =
-    handleTools;
-
-
-  /* =========================================================
-     READY
-     ========================================================= */
+  window.jarvisTool =
+    runTool;
 
   console.log(
-    "J.A.R.V.I.S. — ALL SYSTEMS READY"
+    "J.A.R.V.I.S. ONLINE — ALL 15 TOOLS READY"
   );
-
-  /*
-     Do not automatically open or speak anything
-     when the page loads.
-  */
 
   try {
     msg.focus();
-  } catch (error) {}
+  } catch {}
 
 })();
-  
