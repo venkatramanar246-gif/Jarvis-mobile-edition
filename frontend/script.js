@@ -1,2424 +1,2215 @@
-const GEMINI_API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE";
+"use strict";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_URL =
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-    GEMINI_MODEL +
-    ":generateContent";
+(() => {
 
-const TIME_ZONE = "Asia/Kolkata";
-const TIME_API = "https://utctime.app/api/now/Asia/Kolkata";
+  /* =========================================================
+     J.A.R.V.I.S. SCRIPT
+     PART 1 / 2
+     ========================================================= */
 
-const chatBox = document.getElementById("chat");
-const messageInput = document.getElementById("msg");
-const sendButton = document.getElementById("send");
-const micButton = document.getElementById("mic-btn");
-const camButton = document.getElementById("cam-btn");
-const clearButton = document.getElementById("clear-btn");
-const imageInput = document.getElementById("img-input");
+  const chat = document.getElementById("chat");
+  const msg = document.getElementById("msg");
+  const send = document.getElementById("send");
+  const micBtn = document.getElementById("mic-btn");
+  const camBtn = document.getElementById("cam-btn");
+  const clearBtn = document.getElementById("clear-btn");
+  const imgInput = document.getElementById("img-input");
 
-let isProcessing = false;
-let recognition = null;
+  if (!chat || !msg || !send) {
+    console.error("JARVIS: Required HTML elements are missing.");
+    return;
+  }
 
-let timeOffset = 0;
-let timeOnline = false;
-let timeSyncing = false;
+  let recognition = null;
+  let listening = false;
+  let busy = false;
+  let timerNumber = 0;
 
-let activeTimers = [];
+  const MEMORY_KEY = "JARVIS_MEMORY";
 
-let conversationHistory = [];
+  /* =========================================================
+     HELPERS
+     ========================================================= */
 
-try {
-    conversationHistory = JSON.parse(
-        localStorage.getItem("jarvis_history") || "[]"
-    );
+  const clean = value =>
+    String(value ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    if (!Array.isArray(conversationHistory)) {
-        conversationHistory = [];
-    }
-} catch (error) {
-    conversationHistory = [];
-}
+  const lower = value =>
+    clean(value).toLowerCase();
 
+  function showChat() {
+    chat.style.display = "block";
+  }
 
-/* =========================================================
-   STORAGE
-========================================================= */
+  function addMessage(title, text, type = "") {
 
-function saveHistory() {
-    try {
-        localStorage.setItem(
-            "jarvis_history",
-            JSON.stringify(conversationHistory.slice(-40))
-        );
-    } catch (error) {
-        console.warn("Memory save failed:", error);
-    }
-}
+    showChat();
 
+    const box = document.createElement("div");
 
-/* =========================================================
-   TEXT HELPERS
-========================================================= */
+    box.className =
+      "jarvis-message " + type;
 
-function cleanText(text) {
-    return String(text || "")
-        .replace(/\s+/g, " ")
-        .trim();
-}
+    box.style.margin = "8px 0";
+    box.style.padding = "9px 12px";
+    box.style.borderRadius = "10px";
+    box.style.whiteSpace = "pre-wrap";
+    box.style.wordBreak = "break-word";
 
-function normalizeText(text) {
-    return cleanText(text)
-        .toLowerCase()
-        .replace(/[?!.,;:()[\]{}"'`]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-}
+    const name = document.createElement("div");
 
-function containsAny(text, words) {
-    const t = normalizeText(text);
+    name.textContent = title;
 
-    return words.some(word => t.includes(normalizeText(word)));
-}
-
-function safeNumber(value, fallback = 0) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : fallback;
-}
-
-
-/* =========================================================
-   CHAT
-========================================================= */
-
-function addChatMessage(text, type) {
-    if (!chatBox) return;
-
-    const message = document.createElement("div");
-
-    message.className =
-        type === "user"
-            ? "message user-message"
-            : "message jarvis-message";
-
-    const label = document.createElement("strong");
-
-    label.textContent =
-        type === "user"
-            ? "YOU"
-            : "J.A.R.V.I.S";
+    name.style.fontWeight = "bold";
+    name.style.marginBottom = "4px";
 
     const content = document.createElement("div");
 
-    content.textContent = String(text || "");
+    content.textContent = clean(text);
 
-    message.appendChild(label);
-    message.appendChild(content);
+    box.appendChild(name);
+    box.appendChild(content);
 
-    chatBox.appendChild(message);
+    chat.appendChild(box);
 
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
+    chat.scrollTop = chat.scrollHeight;
 
-function userMessage(text) {
-    addChatMessage(text, "user");
-}
+    return box;
+  }
 
-function jarvisMessage(text) {
-    addChatMessage(text, "jarvis");
-}
+  function userMessage(text) {
+    addMessage("YOU", text, "user-message");
+  }
 
-function speak(text) {
-    if (!("speechSynthesis" in window)) {
-        return;
-    }
+  function jarvisMessage(text) {
+    addMessage("J.A.R.V.I.S.", text, "assistant-message");
+  }
 
-    try {
-        window.speechSynthesis.cancel();
+  function reply(text, speakIt = true) {
 
-        const clean = String(text || "")
-            .replace(/https?:\/\/\S+/g, "")
-            .replace(/\n+/g, ". ")
-            .slice(0, 1600);
+    const answer = clean(text);
 
-        if (!clean.trim()) return;
-
-        const voice = new SpeechSynthesisUtterance(clean);
-
-        voice.lang = "en-IN";
-        voice.rate = 1.02;
-        voice.pitch = 1;
-        voice.volume = 1;
-
-        window.speechSynthesis.speak(voice);
-    } catch (error) {
-        console.warn("Speech error:", error);
-    }
-}
-
-function reply(text, voice = true) {
-    const answer =
-        cleanText(text) ||
-        "I could not find a reliable answer.";
+    if (!answer) return;
 
     jarvisMessage(answer);
 
-    conversationHistory.push({
-        role: "model",
-        text: answer,
-        time: Date.now()
-    });
+    saveMemory("lastResponse", answer);
 
-    saveHistory();
-
-    if (voice) {
-        speak(answer);
+    if (speakIt) {
+      speak(answer);
     }
+  }
 
-    return answer;
-}
+  /* =========================================================
+     MEMORY
+     ========================================================= */
 
-
-/* =========================================================
-   FETCH
-========================================================= */
-
-async function fetchJSON(url, options = {}, timeout = 9000) {
-    const controller = new AbortController();
-
-    const timeoutId = setTimeout(() => {
-        controller.abort();
-    }, timeout);
+  function getMemory() {
 
     try {
-        const response = await fetch(url, {
+      return JSON.parse(
+        localStorage.getItem(MEMORY_KEY) || "{}"
+      );
+    } catch {
+      return {};
+    }
+  }
+
+  function saveMemory(key, value) {
+
+    try {
+
+      const memory = getMemory();
+
+      memory[key] = value;
+
+      localStorage.setItem(
+        MEMORY_KEY,
+        JSON.stringify(memory)
+      );
+
+    } catch (e) {
+      console.warn("Memory error:", e);
+    }
+  }
+
+  function clearMemory() {
+
+    try {
+      localStorage.removeItem(MEMORY_KEY);
+    } catch {}
+
+    chat.innerHTML = "";
+    showChat();
+
+    reply(
+      "Memory cleared successfully, Boss."
+    );
+  }
+
+  /* =========================================================
+     SPEECH
+     ========================================================= */
+
+  function speak(text) {
+
+    if (!("speechSynthesis" in window)) {
+      return;
+    }
+
+    try {
+
+      speechSynthesis.cancel();
+
+      const u =
+        new SpeechSynthesisUtterance(
+          clean(text)
+        );
+
+      u.rate = 0.95;
+      u.pitch = 1;
+      u.volume = 1;
+
+      const voices =
+        speechSynthesis.getVoices();
+
+      const voice =
+        voices.find(v =>
+          /en-IN/i.test(v.lang)
+        ) ||
+        voices.find(v =>
+          /en-US/i.test(v.lang)
+        ) ||
+        voices.find(v =>
+          /en-GB/i.test(v.lang)
+        );
+
+      if (voice) {
+        u.voice = voice;
+      }
+
+      speechSynthesis.speak(u);
+
+    } catch (e) {
+      console.warn("TTS error:", e);
+    }
+  }
+
+  /* =========================================================
+     SAFE FETCH
+     ========================================================= */
+
+  async function fetchJSON(
+    url,
+    options = {},
+    timeout = 12000
+  ) {
+
+    const controller =
+      new AbortController();
+
+    const timer =
+      setTimeout(
+        () => controller.abort(),
+        timeout
+      );
+
+    try {
+
+      const response =
+        await fetch(
+          url,
+          {
             ...options,
-            signal: controller.signal,
-            cache: "no-store"
-        });
-
-        if (!response.ok) {
-            throw new Error("HTTP " + response.status);
-        }
-
-        return await response.json();
-    } finally {
-        clearTimeout(timeoutId);
-    }
-}
-
-
-/* =========================================================
-   1. LIVE TIME
-========================================================= */
-
-async function syncLiveTime() {
-    if (timeSyncing) {
-        return timeOnline;
-    }
-
-    timeSyncing = true;
-
-    const started = Date.now();
-
-    try {
-        const response = await fetch(
-            TIME_API + "?_=" + Date.now(),
-            {
-                method: "GET",
-                cache: "no-store"
-            }
+            signal: controller.signal
+          }
         );
 
-        if (!response.ok) {
-            throw new Error("Time server error");
-        }
+      if (!response.ok) {
+        throw new Error(
+          "HTTP " + response.status
+        );
+      }
 
-        const data = await response.json();
-
-        const serverTime = Number(data.unix_ms);
-
-        if (!Number.isFinite(serverTime)) {
-            throw new Error("Invalid server time");
-        }
-
-        const ended = Date.now();
-
-        const halfNetworkDelay =
-            (ended - started) / 2;
-
-        timeOffset =
-            serverTime +
-            halfNetworkDelay -
-            ended;
-
-        timeOnline = true;
-
-        return true;
-
-    } catch (error) {
-        console.warn("Live time sync failed:", error);
-
-        timeOnline = false;
-
-        return false;
+      return await response.json();
 
     } finally {
-        timeSyncing = false;
+
+      clearTimeout(timer);
     }
-}
+  }
 
-function getLiveDate() {
-    return new Date(
-        Date.now() + timeOffset
-    );
-}
+  /* =========================================================
+     01. TIME
+     ========================================================= */
 
-function getCurrentTime() {
-    return new Intl.DateTimeFormat("en-IN", {
-        timeZone: TIME_ZONE,
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: true
-    }).format(getLiveDate());
-}
+  function getTime() {
 
-function getCurrentDate() {
-    return new Intl.DateTimeFormat("en-IN", {
-        timeZone: TIME_ZONE,
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-        year: "numeric"
-    }).format(getLiveDate());
-}
+    const now = new Date();
 
-async function getTimeAnswer() {
-    if (!timeOnline) {
-        await syncLiveTime();
-    }
-
-    const time = getCurrentTime();
-    const date = getCurrentDate();
-
-    if (timeOnline) {
-        return (
-            "The current time is " +
-            time +
-            ". Today is " +
-            date +
-            ". Live India time is synchronized."
-        );
-    }
-
-    return (
-        "The current time is " +
-        time +
-        ". Today is " +
-        date +
-        "."
-    );
-}
-
-function updateClockElements() {
-    const time = getCurrentTime();
-
-    const selectors = [
-        "#clock",
-        "#time",
-        "#current-time",
-        ".clock",
-        ".time"
-    ];
-
-    selectors.forEach(selector => {
-        document.querySelectorAll(selector).forEach(element => {
-            element.textContent = time;
-        });
-    });
-}
-
-function startLiveClock() {
-    updateClockElements();
-
-    setInterval(
-        updateClockElements,
-        1000
-    );
-
-    setInterval(
-        syncLiveTime,
-        60000
-    );
-}
-
-function isTimeCommand(text) {
-    const t = normalizeText(text);
-
-    return (
-        t === "time" ||
-        t === "tim" ||
-        t === "tiem" ||
-        t === "clock" ||
-        t.includes("current time") ||
-        t.includes("what time") ||
-        t.includes("what is the time") ||
-        t.includes("tell me time") ||
-        t.includes("tell me the time") ||
-        t.includes("time now") ||
-        t.includes("show time") ||
-        t.includes("time please") ||
-        t.includes("time plz") ||
-        t.includes("what tim") ||
-        t.includes("టైమ్") ||
-        t.includes("సమయం")
-    );
-}
-
-
-/* =========================================================
-   2. WEATHER
-========================================================= */
-
-async function getWeather() {
-    if (!navigator.geolocation) {
-        return "Location is not available in this browser.";
-    }
-
-    try {
-        const position = await new Promise(
-            (resolve, reject) => {
-                navigator.geolocation.getCurrentPosition(
-                    resolve,
-                    reject,
-                    {
-                        enableHighAccuracy: false,
-                        timeout: 6000,
-                        maximumAge: 300000
-                    }
-                );
-            }
-        );
-
-        const latitude =
-            position.coords.latitude;
-
-        const longitude =
-            position.coords.longitude;
-
-        const url =
-            "https://api.open-meteo.com/v1/forecast" +
-            "?latitude=" + latitude +
-            "&longitude=" + longitude +
-            "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m" +
-            "&timezone=auto";
-
-        const data = await fetchJSON(
-            url,
-            {},
-            8000
-        );
-
-        const current = data.current;
-
-        const weatherNames = {
-            0: "clear sky",
-            1: "mainly clear",
-            2: "partly cloudy",
-            3: "overcast",
-            45: "fog",
-            48: "fog",
-            51: "light drizzle",
-            53: "drizzle",
-            55: "heavy drizzle",
-            61: "light rain",
-            63: "rain",
-            65: "heavy rain",
-            71: "light snow",
-            73: "snow",
-            75: "heavy snow",
-            80: "rain showers",
-            81: "rain showers",
-            82: "heavy rain showers",
-            95: "thunderstorm",
-            96: "thunderstorm with hail",
-            99: "thunderstorm with hail"
-        };
-
-        const condition =
-            weatherNames[
-                current.weather_code
-            ] || "unknown conditions";
-
-        return (
-            "Current temperature is " +
-            current.temperature_2m +
-            "°C with " +
-            condition +
-            ". Feels like " +
-            current.apparent_temperature +
-            "°C. Humidity is " +
-            current.relative_humidity_2m +
-            "%. Wind speed is " +
-            current.wind_speed_10m +
-            " km/h."
-        );
-
-    } catch (error) {
-        return (
-            "I could not get live weather. " +
-            "Please allow location permission and try again."
-        );
-    }
-}
-
-function isWeatherCommand(text) {
-    return containsAny(text, [
-        "weather",
-        "temperature",
-        "temp",
-        "climate",
-        "వాతావరణం",
-        "టెంపరేచర్"
-    ]);
-}
-
-
-/* =========================================================
-   3. TIMER
-========================================================= */
-
-function parseTimer(text) {
-    const t = normalizeText(text);
-
-    let totalSeconds = 0;
-
-    const hourMatch =
-        t.match(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h)\b/i);
-
-    const minuteMatch =
-        t.match(/(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|m)\b/i);
-
-    const secondMatch =
-        t.match(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\b/i);
-
-    if (hourMatch) {
-        totalSeconds +=
-            Number(hourMatch[1]) * 3600;
-    }
-
-    if (minuteMatch) {
-        totalSeconds +=
-            Number(minuteMatch[1]) * 60;
-    }
-
-    if (secondMatch) {
-        totalSeconds +=
-            Number(secondMatch[1]);
-    }
-
-    if (!totalSeconds) {
-        const number =
-            t.match(/\b(\d+)\b/);
-
-        if (number) {
-            totalSeconds =
-                Number(number[1]) * 60;
+    const time =
+      now.toLocaleTimeString(
+        "en-IN",
+        {
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit"
         }
-    }
+      );
 
-    return Math.max(
-        0,
-        Math.round(totalSeconds)
-    );
-}
-
-function isTimerCommand(text) {
-    const t = normalizeText(text);
+    const date =
+      now.toLocaleDateString(
+        "en-IN",
+        {
+          weekday: "long",
+          day: "numeric",
+          month: "long",
+          year: "numeric"
+        }
+      );
 
     return (
-        t.includes("timer") ||
-        t.includes("countdown") ||
-        t.includes("టైమర్")
+      "The current time is " +
+      time +
+      ". Today is " +
+      date +
+      ", Boss."
     );
-}
+  }
 
-function formatDuration(seconds) {
-    const h =
-        Math.floor(seconds / 3600);
+  /* =========================================================
+     02. WEATHER
+     ========================================================= */
 
-    const m =
-        Math.floor((seconds % 3600) / 60);
+  function getLocation() {
 
-    const s =
-        seconds % 60;
+    return new Promise(
+      (resolve, reject) => {
 
-    const parts = [];
+        if (!navigator.geolocation) {
 
-    if (h) {
-        parts.push(
-            h + " hour" +
-            (h > 1 ? "s" : "")
+          reject(
+            new Error(
+              "Geolocation unavailable"
+            )
+          );
+
+          return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+          resolve,
+          reject,
+          {
+            enableHighAccuracy: false,
+            timeout: 10000,
+            maximumAge: 300000
+          }
         );
-    }
+      }
+    );
+  }
 
-    if (m) {
-        parts.push(
-            m + " minute" +
-            (m > 1 ? "s" : "")
-        );
-    }
+  function weatherText(code) {
 
-    if (s) {
-        parts.push(
-            s + " second" +
-            (s > 1 ? "s" : "")
-        );
-    }
+    const map = {
 
-    return parts.join(" and ");
-}
+      0: "Clear sky",
+      1: "Mainly clear",
+      2: "Partly cloudy",
+      3: "Overcast",
 
-function startTimer(seconds) {
-    if (!seconds || seconds < 1) {
-        return (
-            "Please tell me the timer duration. " +
-            "For example: set timer for 2 minutes."
-        );
-    }
+      45: "Fog",
+      48: "Fog",
 
-    const timer = {
-        end: Date.now() + seconds * 1000,
-        interval: null
+      51: "Light drizzle",
+      53: "Moderate drizzle",
+      55: "Heavy drizzle",
+
+      61: "Light rain",
+      63: "Moderate rain",
+      65: "Heavy rain",
+
+      71: "Light snow",
+      73: "Moderate snow",
+      75: "Heavy snow",
+
+      80: "Light rain showers",
+      81: "Moderate rain showers",
+      82: "Heavy rain showers",
+
+      95: "Thunderstorm",
+      96: "Thunderstorm with hail",
+      99: "Thunderstorm with heavy hail"
     };
 
-    timer.interval = setInterval(() => {
-        if (Date.now() >= timer.end) {
-            clearInterval(timer.interval);
+    return map[code] || "Unknown conditions";
+  }
 
-            activeTimers =
-                activeTimers.filter(
-                    item => item !== timer
-                );
-
-            const message =
-                "Timer finished.";
-
-            jarvisMessage(message);
-            speak(message);
-        }
-    }, 500);
-
-    activeTimers.push(timer);
-
-    return (
-        "Timer set for " +
-        formatDuration(seconds) +
-        "."
-    );
-}
-
-
-/* =========================================================
-   4. DICE / COIN
-========================================================= */
-
-function isDiceCommand(text) {
-    return containsAny(text, [
-        "dice",
-        "roll dice",
-        "roll a dice",
-        "roll the dice",
-        "throw dice",
-        "డైస్"
-    ]);
-}
-
-function isCoinCommand(text) {
-    return containsAny(text, [
-        "coin",
-        "flip coin",
-        "flip a coin",
-        "toss coin",
-        "toss a coin",
-        "heads or tails",
-        "కాయిన్"
-    ]);
-}
-
-function rollDice() {
-    const number =
-        Math.floor(Math.random() * 6) + 1;
-
-    return "You rolled a " + number + ".";
-}
-
-function flipCoin() {
-    return Math.random() < 0.5
-        ? "The coin landed on Heads."
-        : "The coin landed on Tails.";
-}
-
-
-/* =========================================================
-   5. JOKE
-========================================================= */
-
-function isJokeCommand(text) {
-    return containsAny(text, [
-        "joke",
-        "tell me a joke",
-        "tell a joke",
-        "make me laugh",
-        "funny joke",
-        "జోక్"
-    ]);
-}
-
-async function getJoke() {
-    try {
-        const data = await fetchJSON(
-            "https://official-joke-api.appspot.com/random_joke",
-            {},
-            7000
-        );
-
-        return (
-            data.setup +
-            " " +
-            data.punchline
-        );
-
-    } catch (error) {
-        return (
-            "Why did the computer go to the doctor? " +
-            "Because it had a byte problem."
-        );
-    }
-}
-
-
-/* =========================================================
-   6. QUOTE
-========================================================= */
-
-function isQuoteCommand(text) {
-    return containsAny(text, [
-        "quote",
-        "give me a quote",
-        "motivational quote",
-        "motivation quote",
-        "inspirational quote",
-        "మోటివేషన్"
-    ]);
-}
-
-async function getQuote() {
-    try {
-        const data = await fetchJSON(
-            "https://dummyjson.com/quotes/random",
-            {},
-            7000
-        );
-
-        return (
-            '"' +
-            data.quote +
-            '" — ' +
-            data.author
-        );
-
-    } catch (error) {
-        return (
-            '"The secret of getting ahead " +
-            "is getting started." — Mark Twain'
-        );
-    }
-}
-
-
-/* =========================================================
-   7. NEWS
-========================================================= */
-
-function isNewsCommand(text) {
-    return containsAny(text, [
-        "news",
-        "latest news",
-        "today news",
-        "top news",
-        "headlines",
-        "latest headlines",
-        "న్యూస్"
-    ]);
-}
-
-async function getNews() {
-    try {
-        const rss =
-            "https://news.google.com/rss" +
-            "?hl=en-IN&gl=IN&ceid=IN:en";
-
-        const url =
-            "https://api.rss2json.com/v1/api.json" +
-            "?rss_url=" +
-            encodeURIComponent(rss);
-
-        const data = await fetchJSON(
-            url,
-            {},
-            9000
-        );
-
-        if (
-            !data.items ||
-            !data.items.length
-        ) {
-            throw new Error("No news");
-        }
-
-        const headlines =
-            data.items
-                .slice(0, 5)
-                .map(
-                    (item, index) =>
-                        (index + 1) +
-                        ". " +
-                        item.title
-                );
-
-        return (
-            "Latest headlines:\n" +
-            headlines.join("\n")
-        );
-
-    } catch (error) {
-        return (
-            "Live news is temporarily unavailable. " +
-            "Say search latest news to open Google."
-        );
-    }
-}
-
-
-/* =========================================================
-   8. TRANSLATE
-========================================================= */
-
-const languageCodes = {
-    english: "en",
-    telugu: "te",
-    hindi: "hi",
-    tamil: "ta",
-    kannada: "kn",
-    malayalam: "ml",
-    bengali: "bn",
-    marathi: "mr",
-    gujarati: "gu",
-    punjabi: "pa",
-    urdu: "ur",
-    french: "fr",
-    german: "de",
-    spanish: "es",
-    italian: "it",
-    portuguese: "pt",
-    russian: "ru",
-    arabic: "ar",
-    chinese: "zh",
-    japanese: "ja",
-    korean: "ko"
-};
-
-function extractTranslation(text) {
-    const raw = cleanText(text);
-
-    const patterns = [
-        /^translate\s+(.+?)\s+(?:to|into)\s+([a-z]+)$/i,
-        /^translate\s+"(.+?)"\s+(?:to|into)\s+([a-z]+)$/i,
-        /^translate\s+(.+?)\s+in\s+([a-z]+)$/i
-    ];
-
-    for (const pattern of patterns) {
-        const match =
-            raw.match(pattern);
-
-        if (match) {
-            return {
-                phrase: match[1],
-                language: match[2]
-            };
-        }
-    }
-
-    return null;
-}
-
-function isTranslateCommand(text) {
-    return normalizeText(text)
-        .startsWith("translate");
-}
-
-async function translateText(phrase, language) {
-    const target =
-        languageCodes[
-            language.toLowerCase()
-        ] ||
-        language.toLowerCase().slice(0, 2);
+  async function getWeather() {
 
     try {
-        const url =
-            "https://api.mymemory.translated.net/get" +
-            "?q=" +
-            encodeURIComponent(phrase) +
-            "&langpair=auto|" +
-            encodeURIComponent(target);
 
-        const data = await fetchJSON(
-            url,
-            {},
-            8000
-        );
+      const position =
+        await getLocation();
 
-        const result =
-            data?.responseData?.translatedText;
+      const lat =
+        position.coords.latitude;
 
-        if (!result) {
-            throw new Error("Translation failed");
-        }
+      const lon =
+        position.coords.longitude;
 
-        return (
-            "Translation: " +
-            result
-        );
+      const url =
+        "https://api.open-meteo.com/v1/forecast" +
+        "?latitude=" + encodeURIComponent(lat) +
+        "&longitude=" + encodeURIComponent(lon) +
+        "&current=" +
+        "temperature_2m," +
+        "apparent_temperature," +
+        "relative_humidity_2m," +
+        "wind_speed_10m," +
+        "weather_code" +
+        "&timezone=auto";
 
-    } catch (error) {
-        return (
-            "I could not translate that right now."
-        );
+      const data =
+        await fetchJSON(url);
+
+      const c =
+        data.current;
+
+      return (
+        "Current weather: " +
+        weatherText(c.weather_code) +
+        ". Temperature is " +
+        c.temperature_2m +
+        "°C. Feels like " +
+        c.apparent_temperature +
+        "°C. Humidity is " +
+        c.relative_humidity_2m +
+        "%. Wind speed is " +
+        c.wind_speed_10m +
+        " km/h."
+      );
+
+    } catch (e) {
+
+      return (
+        "I could not get live weather. " +
+        "Please allow location permission and try again."
+      );
     }
-}
+  }
 
+  /* =========================================================
+     03. TIMER
+     ========================================================= */
 
-/* =========================================================
-   9. CURRENCY
-========================================================= */
-
-function isCurrencyCommand(text) {
-    return containsAny(text, [
-        "currency",
-        "convert money",
-        "convert usd",
-        "convert inr",
-        "exchange rate",
-        "exchange",
-        "convert"
-    ]);
-}
-
-function extractCurrency(text) {
-    const raw = cleanText(text);
+  function createTimer(text) {
 
     const match =
-        raw.match(
-            /(?:convert|exchange)\s+(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s+(?:to|into)\s+([A-Za-z]{3})/i
-        );
+      clean(text).match(
+        /(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)/i
+      );
 
     if (!match) {
-        return null;
+
+      return (
+        "Please specify the timer duration, for example: " +
+        "timer 10 seconds."
+      );
     }
 
-    return {
-        amount: Number(match[1]),
-        from: match[2].toUpperCase(),
-        to: match[3].toUpperCase()
-    };
-}
+    const amount =
+      Number(match[1]);
 
-async function convertCurrency(
-    amount,
-    from,
-    to
-) {
-    try {
-        const url =
-            "https://api.frankfurter.app/latest" +
-            "?amount=" +
-            encodeURIComponent(amount) +
-            "&from=" +
-            encodeURIComponent(from) +
-            "&to=" +
-            encodeURIComponent(to);
+    const unit =
+      match[2].toLowerCase();
 
-        const data = await fetchJSON(
-            url,
-            {},
-            7000
-        );
+    let milliseconds;
 
-        if (
-            !data.rates ||
-            data.rates[to] === undefined
-        ) {
-            throw new Error("Rate unavailable");
-        }
+    if (/hour|hr/.test(unit)) {
 
-        const result =
-            Number(data.rates[to]);
+      milliseconds =
+        amount * 60 * 60 * 1000;
 
-        return (
-            amount +
-            " " +
-            from +
-            " is approximately " +
-            result.toFixed(2) +
-            " " +
-            to +
-            "."
-        );
+    } else if (/minute|min/.test(unit)) {
 
-    } catch (error) {
-        return (
-            "I could not get the current exchange rate."
-        );
-    }
-}
+      milliseconds =
+        amount * 60 * 1000;
 
+    } else {
 
-/* =========================================================
-   10. MEANING
-========================================================= */
-
-function extractMeaning(text) {
-    const raw = cleanText(text);
-
-    const patterns = [
-        /^meaning of\s+(.+)$/i,
-        /^define\s+(.+)$/i,
-        /^definition of\s+(.+)$/i,
-        /^what does\s+(.+?)\s+mean$/i,
-        /^what is the meaning of\s+(.+)$/i
-    ];
-
-    for (const pattern of patterns) {
-        const match =
-            raw.match(pattern);
-
-        if (match) {
-            return match[1].trim();
-        }
+      milliseconds =
+        amount * 1000;
     }
 
-    return null;
-}
+    const id =
+      ++timerNumber;
 
-async function getMeaning(word) {
-    try {
-        const data = await fetchJSON(
-            "https://api.dictionaryapi.dev/api/v2/entries/en/" +
-            encodeURIComponent(word),
-            {},
-            7000
-        );
+    setTimeout(
+      () => {
 
-        const meanings =
-            data?.[0]?.meanings || [];
+        const text =
+          "Timer " +
+          id +
+          " is complete, Boss.";
 
-        for (const meaning of meanings) {
-            const definition =
-                meaning?.definitions?.[0]?.definition;
+        jarvisMessage(text);
+        speak(text);
 
-            if (definition) {
-                return (
-                    word +
-                    ": " +
-                    definition
-                );
-            }
-        }
-
-        return (
-            "I could not find the meaning of " +
-            word +
-            "."
-        );
-
-    } catch (error) {
-        return (
-            "I could not find the meaning of " +
-            word +
-            "."
-        );
-    }
-}
-/* =========================================================
-   11. PASSWORD
-========================================================= */
-
-function isPasswordCommand(text) {
-    return containsAny(text, [
-        "password",
-        "generate password",
-        "create password",
-        "make password",
-        "strong password",
-        "పాస్వర్డ్"
-    ]);
-}
-
-function generatePassword(length = 16) {
-    length = Math.max(
-        8,
-        Math.min(64, Number(length) || 16)
+      },
+      milliseconds
     );
 
-    const chars =
-        "ABCDEFGHJKLMNPQRSTUVWXYZ" +
-        "abcdefghijkmnopqrstuvwxyz" +
-        "23456789" +
-        "!@#$%^&*";
+    return (
+      "Timer " +
+      id +
+      " set for " +
+      amount +
+      " " +
+      unit +
+      "."
+    );
+  }
+
+  /* =========================================================
+     04. DICE / COIN
+     ========================================================= */
+
+  function diceCoin(text) {
+
+    const t =
+      lower(text);
+
+    if (
+      t.includes("coin") ||
+      t.includes("flip") ||
+      t.includes("toss") ||
+      t.includes("కాయిన్")
+    ) {
+
+      const result =
+        Math.random() < 0.5
+          ? "Heads"
+          : "Tails";
+
+      return (
+        "Coin toss result: " +
+        result +
+        "."
+      );
+    }
+
+    let sides = 6;
+
+    const match =
+      t.match(
+        /(?:d|dice)\s*(\d+)/
+      );
+
+    if (match) {
+
+      sides =
+        Math.max(
+          2,
+          Math.min(
+            1000,
+            Number(match[1])
+          )
+        );
+    }
+
+    const result =
+      Math.floor(
+        Math.random() * sides
+      ) + 1;
+
+    return (
+      "Dice result: " +
+      result +
+      " out of " +
+      sides +
+      "."
+    );
+  }
+
+  /* =========================================================
+     05. JOKE
+     ========================================================= */
+
+  async function getJoke() {
+
+    try {
+
+      const data =
+        await fetchJSON(
+          "https://v2.jokeapi.dev/joke/Any?safe-mode",
+          {},
+          10000
+        );
+
+      if (data.type === "single") {
+        return data.joke;
+      }
+
+      if (
+        data.setup &&
+        data.delivery
+      ) {
+
+        return (
+          data.setup +
+          " " +
+          data.delivery
+        );
+      }
+
+    } catch {}
+
+    return (
+      "Why did the computer get cold? " +
+      "Because it left its Windows open."
+    );
+  }
+
+  /* =========================================================
+     06. QUOTE
+     ========================================================= */
+
+  async function getQuote() {
+
+    try {
+
+      const data =
+        await fetchJSON(
+          "https://dummyjson.com/quotes/random",
+          {},
+          10000
+        );
+
+      if (data.quote) {
+
+        return (
+          "\"" +
+          data.quote +
+          "\" — " +
+          (
+            data.author ||
+            "Unknown"
+          )
+        );
+      }
+
+    } catch {}
+
+    return (
+      "Success is built from small steps taken consistently."
+    );
+  }
+
+  /* =========================================================
+     07. NEWS
+     ========================================================= */
+
+  async function getNews() {
+
+    try {
+
+      const rss =
+        "https://news.google.com/rss" +
+        "?hl=en-IN&gl=IN&ceid=IN:en";
+
+      const url =
+        "https://api.rss2json.com/v1/api.json" +
+        "?rss_url=" +
+        encodeURIComponent(rss);
+
+      const data =
+        await fetchJSON(
+          url,
+          {},
+          15000
+        );
+
+      const items =
+        Array.isArray(data.items)
+          ? data.items.slice(0, 5)
+          : [];
+
+      if (!items.length) {
+        throw new Error("No news");
+      }
+
+      const headlines =
+        items
+          .map(
+            (item, i) =>
+              (i + 1) +
+              ". " +
+              clean(item.title)
+          )
+          .join("\n");
+
+      return (
+        "Latest headlines:\n" +
+        headlines
+      );
+
+    } catch {
+
+      return (
+        "Live news is temporarily unavailable. " +
+        "Please try again."
+      );
+    }
+  }
+
+  /* =========================================================
+     08. TRANSLATE
+     ========================================================= */
+
+  async function translateText(text) {
+
+    let query =
+      clean(text)
+        .replace(
+          /^translate\s*/i,
+          ""
+        )
+        .replace(
+          /^translation\s*/i,
+          ""
+        )
+        .trim();
+
+    let target = "te";
+
+    if (
+      /\bto\s+english\b/i.test(query)
+    ) {
+
+      target = "en";
+
+      query =
+        query
+          .replace(
+            /\bto\s+english\b/i,
+            ""
+          )
+          .trim();
+    }
+
+    if (
+      /\bto\s+telugu\b/i.test(query)
+    ) {
+
+      target = "te";
+
+      query =
+        query
+          .replace(
+            /\bto\s+telugu\b/i,
+            ""
+          )
+          .trim();
+    }
+
+    if (!query) {
+
+      return (
+        "Tell me what you want to translate."
+      );
+    }
+
+    try {
+
+      const url =
+        "https://api.mymemory.translated.net/get" +
+        "?q=" +
+        encodeURIComponent(query) +
+        "&langpair=auto|" +
+        target;
+
+      const data =
+        await fetchJSON(
+          url,
+          {},
+          15000
+        );
+
+      const result =
+        data?.responseData?.translatedText;
+
+      if (result) {
+
+        return (
+          "Translation: " +
+          result
+        );
+      }
+
+    } catch {}
+
+    return (
+      "Translation service is temporarily unavailable."
+    );
+  }
+
+  /* =========================================================
+     09. CURRENCY
+     ========================================================= */
+
+  async function currency(text) {
+
+    const match =
+      clean(text).match(
+        /(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s*(?:to|into|in)\s*([A-Za-z]{3})/i
+      );
+
+    if (!match) {
+
+      return (
+        "Use this format: 100 USD to INR."
+      );
+    }
+
+    const amount =
+      Number(match[1]);
+
+    const from =
+      match[2].toUpperCase();
+
+    const to =
+      match[3].toUpperCase();
+
+    try {
+
+      const data =
+        await fetchJSON(
+          "https://open.er-api.com/v6/latest/" +
+          encodeURIComponent(from),
+          {},
+          12000
+        );
+
+      const rate =
+        data?.rates?.[to];
+
+      if (
+        typeof rate !== "number"
+      ) {
+        throw new Error("No rate");
+      }
+
+      const result =
+        amount * rate;
+
+      return (
+        amount +
+        " " +
+        from +
+        " = " +
+        result.toFixed(2) +
+        " " +
+        to +
+        " at the current available exchange rate."
+      );
+
+    } catch {
+
+      return (
+        "I could not retrieve the live exchange rate right now."
+      );
+    }
+  }
+
+  /* =========================================================
+     10. MEANING
+     ========================================================= */
+
+  async function meaning(text) {
+
+    let word =
+      clean(text)
+        .replace(
+          /^what\s+is\s+the\s+meaning\s+of\s*/i,
+          ""
+        )
+        .replace(
+          /^meaning\s+of\s*/i,
+          ""
+        )
+        .replace(
+          /^define\s+/i,
+          ""
+        )
+        .replace(
+          /^dictionary\s+/i,
+          ""
+        )
+        .trim();
+
+    word =
+      word
+        .split(/\s+/)[0]
+        .replace(
+          /[^a-zA-Z'-]/g,
+          ""
+        );
+
+    if (!word) {
+
+      return (
+        "Tell me the word you want the meaning of."
+      );
+    }
+
+    try {
+
+      const data =
+        await fetchJSON(
+          "https://api.dictionaryapi.dev/api/v2/entries/en/" +
+          encodeURIComponent(word),
+          {},
+          10000
+        );
+
+      const m =
+        data?.[0]?.meanings?.[0];
+
+      const definition =
+        m?.definitions?.[0]?.definition;
+
+      const example =
+        m?.definitions?.[0]?.example;
+
+      const part =
+        m?.partOfSpeech;
+
+      if (definition) {
+
+        return (
+          word +
+          (part ? " (" + part + ")" : "") +
+          " means: " +
+          definition +
+          (
+            example
+              ? " Example: " + example
+              : ""
+          )
+        );
+      }
+
+    } catch {}
+
+    return (
+      "I could not find a dictionary definition for " +
+      word +
+      "."
+    );
+  }
+    /* =========================================================
+     11. PASSWORD
+     ========================================================= */
+
+  function generatePassword(text) {
+
+    const match =
+      clean(text).match(
+        /\b(\d{1,2})\b/
+      );
+
+    const length =
+      Math.max(
+        8,
+        Math.min(
+          64,
+          Number(match?.[1] || 16)
+        )
+      );
+
+    const upper =
+      "ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+    const lowerChars =
+      "abcdefghijkmnopqrstuvwxyz";
+
+    const numbers =
+      "23456789";
+
+    const symbols =
+      "!@#$%^&*_-+=";
+
+    const all =
+      upper +
+      lowerChars +
+      numbers +
+      symbols;
 
     let password = "";
 
     if (
-        window.crypto &&
-        window.crypto.getRandomValues
+      window.crypto &&
+      window.crypto.getRandomValues
     ) {
-        const values =
-            new Uint32Array(length);
 
-        window.crypto.getRandomValues(values);
+      const values =
+        new Uint32Array(length);
 
-        for (let i = 0; i < length; i++) {
-            password +=
-                chars[
-                    values[i] % chars.length
-                ];
-        }
+      window.crypto.getRandomValues(
+        values
+      );
+
+      for (
+        let i = 0;
+        i < length;
+        i++
+      ) {
+
+        password +=
+          all[
+            values[i] % all.length
+          ];
+      }
+
     } else {
-        for (let i = 0; i < length; i++) {
-            password +=
-                chars[
-                    Math.floor(
-                        Math.random() *
-                        chars.length
-                    )
-                ];
-        }
+
+      for (
+        let i = 0;
+        i < length;
+        i++
+      ) {
+
+        password +=
+          all[
+            Math.floor(
+              Math.random() * all.length
+            )
+          ];
+      }
     }
-
-    return password;
-}
-
-
-/* =========================================================
-   12. SEARCH
-========================================================= */
-
-function isSearchCommand(text) {
-    const t = normalizeText(text);
 
     return (
-        t.startsWith("search ") ||
-        t.startsWith("search for ") ||
-        t.startsWith("google ") ||
-        t.startsWith("look up ") ||
-        t.startsWith("find ")
+      "Generated secure password: " +
+      password
     );
-}
+  }
 
-function extractSearch(text) {
-    const raw = cleanText(text);
+  /* =========================================================
+     12. SEARCH
+     ========================================================= */
 
-    const patterns = [
-        /^search for\s+(.+)$/i,
-        /^search\s+(.+)$/i,
-        /^google\s+(.+)$/i,
-        /^look up\s+(.+)$/i,
-        /^find\s+(.+)$/i
-    ];
+  function webSearch(text) {
 
-    for (const pattern of patterns) {
-        const match =
-            raw.match(pattern);
+    let query =
+      clean(text)
+        .replace(
+          /^search\s+for\s+/i,
+          ""
+        )
+        .replace(
+          /^search\s+/i,
+          ""
+        )
+        .replace(
+          /^google\s+/i,
+          ""
+        )
+        .replace(
+          /^look\s+up\s+/i,
+          ""
+        )
+        .trim();
 
-        if (match) {
-            return match[1].trim();
-        }
+    if (!query) {
+
+      return (
+        "Tell me what you want to search for."
+      );
     }
 
-    return null;
-}
-
-function searchGoogle(query) {
     const url =
-        "https://www.google.com/search?q=" +
-        encodeURIComponent(query);
+      "https://www.google.com/search?q=" +
+      encodeURIComponent(query);
 
     window.open(
-        url,
-        "_blank",
-        "noopener,noreferrer"
+      url,
+      "_blank",
+      "noopener,noreferrer"
     );
 
     return (
-        "Searching Google for " +
-        query +
-        "."
+      "Searching Google for: " +
+      query
     );
-}
+  }
 
+  /* =========================================================
+     13. OPEN APPS
+     ========================================================= */
 
-/* =========================================================
-   13. OPEN APPS
-========================================================= */
-
-const APP_URLS = {
-    youtube: "https://www.youtube.com/",
-    google: "https://www.google.com/",
-    gmail: "https://mail.google.com/",
-    maps: "https://maps.google.com/",
-    whatsapp: "https://web.whatsapp.com/",
-    instagram: "https://www.instagram.com/",
-    facebook: "https://www.facebook.com/",
-    github: "https://github.com/",
-    chatgpt: "https://chatgpt.com/",
-    spotify: "https://open.spotify.com/"
-};
-
-function extractApp(text) {
-    const t = normalizeText(text);
-
-    const apps =
-        Object.keys(APP_URLS);
-
-    for (const app of apps) {
-        if (
-            t === app ||
-            t.includes("open " + app) ||
-            t.includes("launch " + app) ||
-            t.includes("start " + app)
-        ) {
-            return app;
-        }
-    }
-
-    return null;
-}
-
-function openApp(app) {
-    if (!APP_URLS[app]) {
-        return "I could not find that application.";
-    }
-
-    window.open(
-        APP_URLS[app],
-        "_blank",
-        "noopener,noreferrer"
-    );
-
-    return (
-        "Opening " +
-        app +
-        "."
-    );
-}
-
-
-/* =========================================================
-   14. PLAY SONGS / YOUTUBE
-========================================================= */
-
-function isSongCommand(text) {
-    const t = normalizeText(text);
-
-    return (
-        t.startsWith("play ") ||
-        t.startsWith("play song ") ||
-        t.startsWith("play music ") ||
-        t.startsWith("youtube ")
-    );
-}
-
-function extractSong(text) {
-    const raw = cleanText(text);
-
-    const patterns = [
-        /^play song\s+(.+)$/i,
-        /^play music\s+(.+)$/i,
-        /^play\s+(.+)$/i,
-        /^youtube\s+(.+)$/i
-    ];
-
-    for (const pattern of patterns) {
-        const match =
-            raw.match(pattern);
-
-        if (match) {
-            const query =
-                match[1].trim();
-
-            if (
-                query &&
-                query !== "music" &&
-                query !== "song" &&
-                query !== "a song"
-            ) {
-                return query;
-            }
-        }
-    }
-
-    return null;
-}
-
-function playSong(query) {
-    const url =
-        "https://www.youtube.com/results?search_query=" +
-        encodeURIComponent(query);
-
-    window.open(
-        url,
-        "_blank",
-        "noopener,noreferrer"
-    );
-
-    return (
-        "Searching YouTube for " +
-        query +
-        "."
-    );
-}
-
-
-/* =========================================================
-   15. CRYPTO
-========================================================= */
-
-const CRYPTO_IDS = {
-    bitcoin: "bitcoin",
-    btc: "bitcoin",
-    ethereum: "ethereum",
-    eth: "ethereum",
-    solana: "solana",
-    sol: "solana",
-    dogecoin: "dogecoin",
-    doge: "dogecoin",
-    ripple: "ripple",
-    xrp: "ripple",
-    cardano: "cardano",
-    ada: "cardano"
-};
-
-function isCryptoCommand(text) {
-    return containsAny(text, [
-        "crypto",
-        "cryptocurrency",
-        "bitcoin",
-        "btc",
-        "ethereum",
-        "eth",
-        "solana",
-        "dogecoin",
-        "doge",
-        "ripple",
-        "xrp",
-        "cardano",
-        "ada"
-    ]);
-}
-
-function extractCrypto(text) {
-    const t = normalizeText(text);
-
-    for (const key in CRYPTO_IDS) {
-        if (
-            t.includes(key)
-        ) {
-            return CRYPTO_IDS[key];
-        }
-    }
-
-    return null;
-}
-
-async function getCrypto(coin) {
-    try {
-        const url =
-            "https://api.coingecko.com/api/v3/simple/price" +
-            "?ids=" +
-            encodeURIComponent(coin) +
-            "&vs_currencies=usd,inr" +
-            "&include_24hr_change=true";
-
-        const data = await fetchJSON(
-            url,
-            {},
-            8000
-        );
-
-        if (!data[coin]) {
-            return (
-                "I could not find that cryptocurrency."
-            );
-        }
-
-        const usd =
-            Number(data[coin].usd);
-
-        const inr =
-            Number(data[coin].inr);
-
-        const change =
-            Number(
-                data[coin].usd_24h_change
-            );
-
-        return (
-            coin +
-            " is approximately $" +
-            usd.toLocaleString() +
-            " and ₹" +
-            inr.toLocaleString("en-IN") +
-            ". 24-hour change is " +
-            change.toFixed(2) +
-            "%."
-        );
-
-    } catch (error) {
-        return (
-            "Live cryptocurrency data is temporarily unavailable."
-        );
-    }
-}
-
-
-/* =========================================================
-   BASIC COMMANDS
-========================================================= */
-
-function basicCommand(text) {
-    const t = normalizeText(text);
-
-    if (
-        t === "hi" ||
-        t === "hello" ||
-        t === "hey" ||
-        t.includes("hello jarvis") ||
-        t.includes("hi jarvis")
-    ) {
-        return (
-            "Hello. J.A.R.V.I.S is online and ready."
-        );
-    }
-
-    if (
-        t.includes("who are you") ||
-        t.includes("what are you")
-    ) {
-        return (
-            "I am J.A.R.V.I.S, your personal AI assistant."
-        );
-    }
-
-    if (
-        t.includes("how are you") ||
-        t.includes("how r u")
-    ) {
-        return (
-            "All systems are operational and ready."
-        );
-    }
-
-    if (
-        t === "thanks" ||
-        t === "thank you" ||
-        t === "thank u"
-    ) {
-        return "You're welcome, Boss.";
-    }
-
-    if (
-        t === "status" ||
-        t === "system status"
-    ) {
-        return (
-            "AI engine operational. Connection online. Voice interface ready. Memory active."
-        );
-    }
-
-    return null;
-}
-
-
-/* =========================================================
-   GEMINI AI
-   Handles unknown questions + spelling mistakes
-========================================================= */
-
-async function askGemini(userText, imageData = null) {
-    if (
-        !GEMINI_API_KEY ||
-        GEMINI_API_KEY ===
-        "PASTE_YOUR_GEMINI_API_KEY_HERE"
-    ) {
-        return null;
-    }
-
-    const history =
-        conversationHistory
-            .slice(-12)
-            .map(item => ({
-                role:
-                    item.role === "model"
-                        ? "model"
-                        : "user",
-                parts: [
-                    {
-                        text: item.text
-                    }
-                ]
-            }));
-
-    const instruction = `
-You are J.A.R.V.I.S, a fast personal AI assistant.
-
-Understand the user's intended meaning even when:
-- spelling is wrong
-- grammar is wrong
-- words are missing
-- speech recognition makes mistakes
-- English and Telugu are mixed
-- the command is informal or short
-
-Correct the user's intended meaning silently.
-Do not criticize spelling or grammar.
-
-Answer the user's actual request directly.
-Be concise unless the question needs explanation.
-
-For current/live information:
-never invent data.
-If the application already supplies live data, use it.
-If live data is unavailable, say that clearly.
-
-If the user asks the current time, use the application's India time.
-Current India time: ${getCurrentTime()}
-Current India date: ${getCurrentDate()}
-`;
-
-    const parts = [
-        {
-            text:
-                instruction +
-                "\n\nUser request:\n" +
-                userText
-        }
-    ];
-
-    if (imageData) {
-        parts.push({
-            inline_data: {
-                mime_type:
-                    imageData.mimeType,
-                data:
-                    imageData.data
-            }
-        });
-    }
-
-    try {
-        const response =
-            await fetch(
-                GEMINI_URL,
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type":
-                            "application/json",
-                        "x-goog-api-key":
-                            GEMINI_API_KEY
-                    },
-                    body: JSON.stringify({
-                        contents: [
-                            ...history,
-                            {
-                                role: "user",
-                                parts
-                            }
-                        ],
-                        generationConfig: {
-                            temperature: 0.2,
-                            maxOutputTokens: 700
-                        }
-                    })
-                }
-            );
-
-        if (!response.ok) {
-            const errorText =
-                await response.text();
-
-            console.error(
-                "Gemini API error:",
-                errorText
-            );
-
-            return null;
-        }
-
-        const data =
-            await response.json();
-
-        const answer =
-            data?.candidates?.[0]
-                ?.content?.parts
-                ?.map(
-                    part =>
-                        part.text || ""
-                )
-                .join("")
-                .trim();
-
-        return answer || null;
-
-    } catch (error) {
-        console.error(
-            "Gemini connection error:",
-            error
-        );
-
-        return null;
-    }
-}
-
-
-/* =========================================================
-   IMAGE ANALYSIS
-========================================================= */
-
-function fileToBase64(file) {
-    return new Promise(
-        (resolve, reject) => {
-            const reader =
-                new FileReader();
-
-            reader.onload = () => {
-                const result =
-                    String(
-                        reader.result || ""
-                    );
-
-                const comma =
-                    result.indexOf(",");
-
-                if (comma === -1) {
-                    reject(
-                        new Error(
-                            "Invalid image"
-                        )
-                    );
-
-                    return;
-                }
-
-                resolve({
-                    mimeType:
-                        file.type ||
-                        "image/jpeg",
-                    data:
-                        result.slice(
-                            comma + 1
-                        )
-                });
-            };
-
-            reader.onerror = reject;
-
-            reader.readAsDataURL(file);
-        }
-    );
-}
-
-async function analyzeImage(file) {
-    if (!file) {
-        return "No image selected.";
-    }
-
-    if (!file.type.startsWith("image/")) {
-        return "Please select an image file.";
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-        return (
-            "The image is too large. " +
-            "Please select an image below 10 MB."
-        );
-    }
-
-    try {
-        const imageData =
-            await fileToBase64(file);
-
-        const answer =
-            await askGemini(
-                "Analyze this image carefully. Describe what is visible. If there is readable text, extract the important text. If there are objects, people, places or other details, describe only what can actually be seen. Do not invent details.",
-                imageData
-            );
-
-        return (
-            answer ||
-            "Image loaded, but AI image analysis is unavailable. Please check the Gemini API key."
-        );
-
-    } catch (error) {
-        return (
-            "I could not analyze this image."
-        );
-    }
-}
-
-
-/* =========================================================
-   MAIN TOOL ROUTER
-========================================================= */
-
-async function handleTools(text) {
-    const original =
-        cleanText(text);
+  function openApp(text) {
 
     const t =
-        normalizeText(original);
+      lower(text);
 
-    if (!t) {
-        return "Please enter a command.";
-    }
+    const apps = {
 
+      youtube:
+        "https://www.youtube.com/",
 
-    /* 1 TIME */
-    if (isTimeCommand(t)) {
-        return await getTimeAnswer();
-    }
+      google:
+        "https://www.google.com/",
 
+      gmail:
+        "https://mail.google.com/",
 
-    /* 2 WEATHER */
-    if (isWeatherCommand(t)) {
-        return await getWeather();
-    }
+      whatsapp:
+        "https://web.whatsapp.com/",
 
+      instagram:
+        "https://www.instagram.com/",
 
-    /* 3 TIMER */
-    if (isTimerCommand(t)) {
-        const seconds =
-            parseTimer(t);
+      facebook:
+        "https://www.facebook.com/",
 
-        return startTimer(seconds);
-    }
+      maps:
+        "https://maps.google.com/",
 
+      spotify:
+        "https://open.spotify.com/",
 
-    /* 4 DICE */
-    if (isDiceCommand(t)) {
-        return rollDice();
-    }
+      calculator:
+        "https://www.google.com/search?q=calculator",
 
+      calendar:
+        "https://calendar.google.com/",
 
-    /* 4 COIN */
-    if (isCoinCommand(t)) {
-        return flipCoin();
-    }
+      drive:
+        "https://drive.google.com/",
 
+      chatgpt:
+        "https://chatgpt.com/"
+    };
 
-    /* 5 JOKE */
-    if (isJokeCommand(t)) {
-        return await getJoke();
-    }
+    for (
+      const name in apps
+    ) {
 
+      if (
+        t.includes(name)
+      ) {
 
-    /* 6 QUOTE */
-    if (isQuoteCommand(t)) {
-        return await getQuote();
-    }
-
-
-    /* 7 NEWS */
-    if (isNewsCommand(t)) {
-        return await getNews();
-    }
-
-
-    /* 8 TRANSLATE */
-    if (isTranslateCommand(t)) {
-        const translation =
-            extractTranslation(original);
-
-        if (!translation) {
-            return (
-                "Try: translate hello to Telugu."
-            );
-        }
-
-        return await translateText(
-            translation.phrase,
-            translation.language
+        window.open(
+          apps[name],
+          "_blank",
+          "noopener,noreferrer"
         );
-    }
-
-
-    /* 9 CURRENCY */
-    if (isCurrencyCommand(t)) {
-        const currency =
-            extractCurrency(original);
-
-        if (!currency) {
-            return (
-                "Try: convert 100 USD to INR."
-            );
-        }
-
-        return await convertCurrency(
-            currency.amount,
-            currency.from,
-            currency.to
-        );
-    }
-
-
-    /* 10 MEANING */
-    const word =
-        extractMeaning(original);
-
-    if (word) {
-        return await getMeaning(word);
-    }
-
-
-    /* 11 PASSWORD */
-    if (isPasswordCommand(t)) {
-        const match =
-            t.match(/\b(\d{1,2})\b/);
-
-        const length =
-            match
-                ? Number(match[1])
-                : 16;
 
         return (
-            "Generated password: " +
-            generatePassword(length)
+          "Opening " +
+          name +
+          ", Boss."
         );
+      }
     }
 
+    return (
+      "Tell me which app you want to open."
+    );
+  }
 
-    /* 12 SEARCH */
-    if (isSearchCommand(t)) {
-        const query =
-            extractSearch(original);
+  /* =========================================================
+     14. PLAY SONGS
+     ========================================================= */
 
-        if (!query) {
-            return (
-                "Tell me what you want me to search for."
-            );
-        }
+  function playSong(text) {
 
-        return searchGoogle(query);
+    let query =
+      clean(text)
+        .replace(
+          /^please\s+/i,
+          ""
+        )
+        .replace(
+          /^play\s+/i,
+          ""
+        )
+        .replace(
+          /^song\s+/i,
+          ""
+        )
+        .replace(
+          /^music\s+/i,
+          ""
+        )
+        .trim();
+
+    if (!query) {
+
+      window.open(
+        "https://www.youtube.com/",
+        "_blank",
+        "noopener,noreferrer"
+      );
+
+      return (
+        "Opening YouTube."
+      );
     }
 
+    window.open(
+      "https://www.youtube.com/results?search_query=" +
+      encodeURIComponent(query),
+      "_blank",
+      "noopener,noreferrer"
+    );
 
-    /* 13 OPEN APPS */
-    const app =
-        extractApp(original);
+    return (
+      "Searching YouTube for: " +
+      query
+    );
+  }
 
-    if (app) {
-        return openApp(app);
+  /* =========================================================
+     15. CRYPTO
+     ========================================================= */
+
+  async function cryptoPrice(text) {
+
+    const t =
+      lower(text);
+
+    const coins = {
+
+      bitcoin: "bitcoin",
+      btc: "bitcoin",
+
+      ethereum: "ethereum",
+      eth: "ethereum",
+
+      dogecoin: "dogecoin",
+      doge: "dogecoin",
+
+      solana: "solana",
+      sol: "solana",
+
+      ripple: "ripple",
+      xrp: "ripple",
+
+      cardano: "cardano",
+      ada: "cardano"
+    };
+
+    let coin = "bitcoin";
+
+    for (
+      const key in coins
+    ) {
+
+      if (
+        t.includes(key)
+      ) {
+
+        coin =
+          coins[key];
+
+        break;
+      }
     }
 
+    try {
 
-    /* 14 SONGS */
-    if (isSongCommand(original)) {
-        const song =
-            extractSong(original);
-
-        if (song) {
-            return playSong(song);
-        }
-
-        return (
-            "Tell me the song or artist you want to play."
+      const data =
+        await fetchJSON(
+          "https://api.coingecko.com/api/v3/simple/price" +
+          "?ids=" +
+          encodeURIComponent(coin) +
+          "&vs_currencies=usd,inr" +
+          "&include_24hr_change=true",
+          {},
+          15000
         );
+
+      const item =
+        data?.[coin];
+
+      if (!item) {
+        throw new Error("No data");
+      }
+
+      let answer =
+        coin.toUpperCase() +
+        " current price: $" +
+        Number(
+          item.usd
+        ).toLocaleString();
+
+      if (
+        typeof item.inr === "number"
+      ) {
+
+        answer +=
+          " | ₹" +
+          Number(
+            item.inr
+          ).toLocaleString();
+      }
+
+      if (
+        typeof item.usd_24h_change ===
+        "number"
+      ) {
+
+        answer +=
+          " | 24h change: " +
+          item.usd_24h_change.toFixed(2) +
+          "%";
+      }
+
+      return answer + ".";
+
+    } catch {
+
+      return (
+        "Live cryptocurrency data is temporarily unavailable."
+      );
+    }
+  }
+
+  /* =========================================================
+     EXACT TOOL ROUTER
+     ========================================================= */
+
+  async function runTool(text) {
+
+    const t =
+      lower(text);
+
+    /* TIME */
+
+    if (
+      t === "time" ||
+      t.includes("what time") ||
+      t.includes("current time") ||
+      t.includes("tell me the time") ||
+      t.includes("సమయం") ||
+      t.includes("టైమ్")
+    ) {
+      return getTime();
     }
 
 
-    /* 15 CRYPTO */
-    if (isCryptoCommand(t)) {
-        const coin =
-            extractCrypto(t);
+    /* WEATHER */
 
-        if (coin) {
-            return await getCrypto(coin);
-        }
-
-        return (
-            "Tell me the cryptocurrency name, for example Bitcoin."
-        );
+    if (
+      t.includes("weather") ||
+      t.includes("temperature") ||
+      t.includes("forecast") ||
+      t.includes("వాతావరణం") ||
+      t.includes("వెదర్")
+    ) {
+      return await getWeather();
     }
 
 
-    /* BASIC */
-    const basic =
-        basicCommand(original);
+    /* TIMER */
 
-    if (basic) {
-        return basic;
+    if (
+      t.includes("timer") ||
+      t.includes("set timer") ||
+      t.includes("టైమర్")
+    ) {
+      return createTimer(text);
+    }
+
+
+    /* DICE / COIN */
+
+    if (
+      t.includes("dice") ||
+      t.includes("roll") ||
+      t.includes("coin") ||
+      t.includes("flip coin") ||
+      t.includes("toss coin") ||
+      t.includes("డైస్") ||
+      t.includes("కాయిన్")
+    ) {
+      return diceCoin(text);
+    }
+
+
+    /* JOKE */
+
+    if (
+      t === "joke" ||
+      t.includes("tell me a joke") ||
+      t.includes("tell joke") ||
+      t.includes("joke please") ||
+      t.includes("జోక్")
+    ) {
+      return await getJoke();
+    }
+
+
+    /* QUOTE */
+
+    if (
+      t === "quote" ||
+      t.includes("give me a quote") ||
+      t.includes("motivational quote") ||
+      t.includes("motivation") ||
+      t.includes("inspiration") ||
+      t.includes("కోట్")
+    ) {
+      return await getQuote();
+    }
+
+
+    /* NEWS */
+
+    if (
+      t === "news" ||
+      t.includes("latest news") ||
+      t.includes("today news") ||
+      t.includes("latest headlines") ||
+      t.includes("headlines") ||
+      t.includes("వార్తలు")
+    ) {
+      return await getNews();
+    }
+
+
+    /* TRANSLATE */
+
+    if (
+      t.startsWith("translate ") ||
+      t.startsWith("translation ") ||
+      t.includes("translate this") ||
+      t.includes("translate to english") ||
+      t.includes("translate to telugu") ||
+      t.includes("అనువదించ")
+    ) {
+      return await translateText(text);
+    }
+
+
+    /* CURRENCY */
+
+    if (
+      t.includes("currency") ||
+      t.includes("exchange rate") ||
+      t.includes("convert currency") ||
+      /\d+(?:\.\d+)?\s*[a-z]{3}\s+(?:to|into|in)\s*[a-z]{3}/i.test(text)
+    ) {
+      return await currency(text);
+    }
+
+
+    /* MEANING */
+
+    if (
+      t.includes("meaning of") ||
+      t.includes("what is the meaning") ||
+      t.includes("define ") ||
+      t.includes("definition of") ||
+      t.includes("dictionary") ||
+      t.includes("అర్థం")
+    ) {
+      return await meaning(text);
+    }
+
+
+    /* PASSWORD */
+
+    if (
+      t.includes("password") ||
+      t.includes("generate password") ||
+      t.includes("strong password") ||
+      t.includes("create password") ||
+      t.includes("పాస్‌వర్డ్")
+    ) {
+      return generatePassword(text);
+    }
+
+
+    /* SEARCH */
+
+    if (
+      t === "search" ||
+      t.startsWith("search ") ||
+      t.startsWith("google ") ||
+      t.startsWith("look up ") ||
+      t.startsWith("వెతుకు ")
+    ) {
+      return webSearch(text);
+    }
+
+
+    /* OPEN APP */
+
+    if (
+      t.startsWith("open ") ||
+      t.includes("open youtube") ||
+      t.includes("open google") ||
+      t.includes("open gmail") ||
+      t.includes("open whatsapp") ||
+      t.includes("open instagram") ||
+      t.includes("open facebook") ||
+      t.includes("open maps") ||
+      t.includes("open spotify") ||
+      t.includes("open calculator") ||
+      t.includes("open calendar") ||
+      t.includes("open drive") ||
+      t.includes("open chatgpt")
+    ) {
+      return openApp(text);
+    }
+
+
+    /* PLAY SONG */
+
+    if (
+      t.startsWith("play ") ||
+      t.includes("play song") ||
+      t.includes("play music") ||
+      t.includes("youtube") ||
+      t.includes("పాట")
+    ) {
+      return playSong(text);
+    }
+
+
+    /* CRYPTO */
+
+    if (
+      t.includes("crypto") ||
+      t.includes("bitcoin") ||
+      t.includes("btc") ||
+      t.includes("ethereum") ||
+      t.includes("eth") ||
+      t.includes("dogecoin") ||
+      t.includes("doge") ||
+      t.includes("solana") ||
+      t.includes("ripple") ||
+      t.includes("xrp") ||
+      t.includes("cardano") ||
+      t.includes("ada") ||
+      t.includes("క్రిప్టో")
+    ) {
+      return await cryptoPrice(text);
     }
 
 
     return null;
-}
+  }
 
+  /* =========================================================
+     AI FALLBACK
+     ========================================================= */
 
-/* =========================================================
-   MAIN COMMAND PROCESSOR
-========================================================= */
+  async function aiFallback(text) {
 
-async function processCommand(text) {
-    const command =
-        cleanText(text);
+    const memory =
+      getMemory();
 
-    if (!command) {
-        return;
-    }
-
-    if (isProcessing) {
-        return;
-    }
-
-    isProcessing = true;
-
-    userMessage(command);
-
-    conversationHistory.push({
-        role: "user",
-        text: command,
-        time: Date.now()
-    });
-
-    saveHistory();
-
-    if (messageInput) {
-        messageInput.value = "";
-    }
+    const prompt =
+      "You are J.A.R.V.I.S., a personal AI assistant. " +
+      "Give a direct, accurate and concise answer. " +
+      "Do not claim to have performed actions that you did not perform. " +
+      "User question: " +
+      text +
+      "\nPrevious response: " +
+      (memory.lastResponse || "None");
 
     try {
-        let answer =
-            await handleTools(command);
 
+      const response =
+        await fetch(
+          "https://text.pollinations.ai/",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+            body:
+              JSON.stringify({
+                messages: [
+                  {
+                    role: "user",
+                    content: prompt
+                  }
+                ]
+              })
+          }
+        );
 
-        /* Known tools reply immediately.
-           Unknown/mistyped questions go to Gemini. */
+      if (!response.ok) {
+        throw new Error("AI unavailable");
+      }
 
-        if (!answer) {
-            answer =
-                await askGemini(command);
+      const type =
+        response.headers.get(
+          "content-type"
+        ) || "";
+
+      if (
+        type.includes("application/json")
+      ) {
+
+        const data =
+          await response.json();
+
+        const answer =
+          data?.choices?.[0]
+            ?.message?.content ||
+          data?.response ||
+          data?.text;
+
+        if (answer) {
+          return clean(answer);
         }
 
+      } else {
 
-        if (!answer) {
-            answer =
-                "I understood your request, but I could not get a reliable answer right now.";
+        const answer =
+          await response.text();
+
+        if (clean(answer)) {
+          return clean(answer);
         }
+      }
 
-        reply(
-            answer,
-            true
-        );
+    } catch (e) {
 
-    } catch (error) {
-        console.error(
-            "JARVIS command error:",
-            error
-        );
-
-        reply(
-            "Something went wrong while processing that request. Please try again.",
-            true
-        );
-
-    } finally {
-        isProcessing = false;
+      console.warn(
+        "AI fallback unavailable:",
+        e
+      );
     }
-}
 
+    return (
+      "I can handle your J.A.R.V.I.S. tools. " +
+      "For a general question, please try again."
+    );
+  }
 
-/* =========================================================
-   VOICE INPUT
-========================================================= */
+  /* =========================================================
+     IMAGE ANALYSIS
+     ========================================================= */
 
-function setupVoice() {
-    const SpeechRecognition =
-        window.SpeechRecognition ||
-        window.webkitSpeechRecognition;
+  async function analyzeImage(file) {
+
+    if (!file) {
+      throw new Error(
+        "No image selected."
+      );
+    }
 
     if (
-        !SpeechRecognition ||
-        !micButton
+      !file.type.startsWith("image/")
     ) {
-        return;
+      throw new Error(
+        "Please select an image file."
+      );
+    }
+
+    const dataURL =
+      await new Promise(
+        (resolve, reject) => {
+
+          const reader =
+            new FileReader();
+
+          reader.onload =
+            () => resolve(
+              reader.result
+            );
+
+          reader.onerror =
+            () => reject(
+              new Error(
+                "Could not read image."
+              )
+            );
+
+          reader.readAsDataURL(file);
+        }
+      );
+
+    const dimensions =
+      await new Promise(
+        (resolve, reject) => {
+
+          const image =
+            new Image();
+
+          image.onload =
+            () => resolve({
+              width:
+                image.naturalWidth,
+              height:
+                image.naturalHeight
+            });
+
+          image.onerror =
+            () => reject(
+              new Error(
+                "Invalid image."
+              )
+            );
+
+          image.src =
+            dataURL;
+        }
+      );
+
+    let detectedText = "";
+
+    try {
+
+      const form =
+        new FormData();
+
+      form.append(
+        "apikey",
+        "helloworld"
+      );
+
+      form.append(
+        "language",
+        "eng"
+      );
+
+      form.append(
+        "isOverlayRequired",
+        "false"
+      );
+
+      form.append(
+        "base64Image",
+        dataURL
+      );
+
+      const response =
+        await fetch(
+          "https://api.ocr.space/parse/image",
+          {
+            method: "POST",
+            body: form
+          }
+        );
+
+      if (response.ok) {
+
+        const data =
+          await response.json();
+
+        detectedText =
+          clean(
+            (data.ParsedResults || [])
+              .map(
+                x =>
+                  x.ParsedText || ""
+              )
+              .join(" ")
+          );
+      }
+
+    } catch (e) {
+
+      console.warn(
+        "OCR unavailable:",
+        e
+      );
+    }
+
+    let result =
+      "Image analysis complete. " +
+      "Resolution: " +
+      dimensions.width +
+      " × " +
+      dimensions.height +
+      ".";
+
+    if (detectedText) {
+
+      result +=
+        "\nDetected text: " +
+        detectedText.substring(
+          0,
+          2000
+        );
+
+    } else {
+
+      result +=
+        "\nNo readable text was detected.";
+    }
+
+    return result;
+  }
+
+  /* =========================================================
+     IMAGE BUTTON
+     ========================================================= */
+
+  if (camBtn && imgInput) {
+
+    camBtn.addEventListener(
+      "click",
+      event => {
+
+        event.preventDefault();
+
+        imgInput.click();
+      }
+    );
+  }
+
+  if (imgInput) {
+
+    imgInput.addEventListener(
+      "change",
+      async () => {
+
+        const file =
+          imgInput.files?.[0];
+
+        if (!file) return;
+
+        userMessage(
+          "Analyze image: " +
+          file.name
+        );
+
+        try {
+
+          const result =
+            await analyzeImage(file);
+
+          reply(result);
+
+        } catch (e) {
+
+          reply(
+            e.message ||
+            "Image analysis failed."
+          );
+        }
+
+        imgInput.value = "";
+      }
+    );
+  }
+
+  /* =========================================================
+     VOICE INPUT
+     ========================================================= */
+
+  function setupVoice() {
+
+    if (!micBtn) return;
+
+    const SpeechRecognition =
+      window.SpeechRecognition ||
+      window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+
+      micBtn.addEventListener(
+        "click",
+        () => {
+
+          reply(
+            "Voice input is not supported in this browser."
+          );
+        }
+      );
+
+      return;
     }
 
     recognition =
-        new SpeechRecognition();
+      new SpeechRecognition();
 
-    recognition.lang = "en-IN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 3;
+    recognition.lang =
+      "en-IN";
 
-    recognition.onstart = () => {
-        micButton.classList.add(
-            "listening"
+    recognition.continuous =
+      false;
+
+    recognition.interimResults =
+      false;
+
+    recognition.maxAlternatives =
+      1;
+
+    recognition.onstart =
+      () => {
+
+        listening = true;
+
+        micBtn.classList.add(
+          "listening"
         );
 
-        if (messageInput) {
-            messageInput.placeholder =
-                "Listening...";
-        }
-    };
-
-    recognition.onresult = event => {
-        const result =
-            event.results?.[0]?.[0]
-                ?.transcript || "";
-
-        if (messageInput) {
-            messageInput.value =
-                result;
-        }
-
-        if (result.trim()) {
-            processCommand(result);
-        }
-    };
-
-    recognition.onerror = event => {
-        console.warn(
-            "Voice recognition:",
-            event.error
+        micBtn.setAttribute(
+          "aria-label",
+          "Stop voice input"
         );
-    };
+      };
 
-    recognition.onend = () => {
-        micButton.classList.remove(
-            "listening"
+    recognition.onresult =
+      event => {
+
+        const transcript =
+          event.results?.[0]?.[0]
+            ?.transcript;
+
+        if (!transcript) return;
+
+        msg.value =
+          clean(transcript);
+
+        setTimeout(
+          runCommand,
+          50
         );
+      };
 
-        if (messageInput) {
-            messageInput.placeholder =
-                "Enter a command for J.A.R.V.I.S...";
-        }
-    };
+    recognition.onerror =
+      event => {
 
-    micButton.addEventListener(
-        "click",
-        () => {
-            try {
-                recognition.start();
-            } catch (error) {
-                try {
-                    recognition.stop();
-                } catch (e) {}
-            }
-        }
-    );
-}
+        listening = false;
 
-
-/* =========================================================
-   CAMERA
-========================================================= */
-
-function setupCamera() {
-    if (
-        !camButton ||
-        !imageInput
-    ) {
-        return;
-    }
-
-    camButton.addEventListener(
-        "click",
-        () => {
-            imageInput.click();
-        }
-    );
-
-    imageInput.addEventListener(
-        "change",
-        async () => {
-            const file =
-                imageInput.files?.[0];
-
-            if (!file) {
-                return;
-            }
-
-            if (isProcessing) {
-                return;
-            }
-
-            isProcessing = true;
-
-            userMessage(
-                "Analyze this image"
-            );
-
-            try {
-                const answer =
-                    await analyzeImage(file);
-
-                reply(
-                    answer,
-                    true
-                );
-            } finally {
-                imageInput.value = "";
-                isProcessing = false;
-            }
-        }
-    );
-}
-
-
-/* =========================================================
-   INPUT
-========================================================= */
-
-function setupInput() {
-    if (sendButton) {
-        sendButton.addEventListener(
-            "click",
-            () => {
-                processCommand(
-                    messageInput
-                        ? messageInput.value
-                        : ""
-                );
-            }
-        );
-    }
-
-    if (messageInput) {
-        messageInput.addEventListener(
-            "keydown",
-            event => {
-                if (
-                    event.key === "Enter"
-                ) {
-                    event.preventDefault();
-
-                    processCommand(
-                        messageInput.value
-                    );
-                }
-            }
-        );
-    }
-}
-
-
-/* =========================================================
-   CLEAR MEMORY
-========================================================= */
-
-function setupClearMemory() {
-    if (!clearButton) {
-        return;
-    }
-
-    clearButton.addEventListener(
-        "click",
-        () => {
-            conversationHistory.length = 0;
-
-            try {
-                localStorage.removeItem(
-                    "jarvis_history"
-                );
-            } catch (error) {}
-
-            if (chatBox) {
-                chatBox.innerHTML = "";
-            }
-
-            const message =
-                "Memory cleared. J.A.R.V.I.S is ready.";
-
-            jarvisMessage(message);
-            speak(message);
-        }
-    );
-}
-
-
-/* =========================================================
-   FEATURE CARDS
-   Supports the 15 cards shown in your screenshot.
-========================================================= */
-
-function executeFeature(feature) {
-    const f =
-        normalizeText(feature);
-
-    if (
-        f.includes("time") ||
-        f.includes("clock")
-    ) {
-        processCommand(
-            "current time"
+        micBtn.classList.remove(
+          "listening"
         );
 
-    } else if (
-        f.includes("weather")
-    ) {
-        processCommand(
-            "weather"
-        );
-
-    } else if (
-        f.includes("timer")
-    ) {
-        processCommand(
-            "set timer for 1 minute"
-        );
-
-    } else if (
-        f.includes("dice") ||
-        f.includes("coin")
-    ) {
-        processCommand(
-            f.includes("coin")
-                ? "flip coin"
-                : "roll dice"
-        );
-
-    } else if (
-        f.includes("joke")
-    ) {
-        processCommand(
-            "tell me a joke"
-        );
-
-    } else if (
-        f.includes("quote")
-    ) {
-        processCommand(
-            "give me a quote"
-        );
-
-    } else if (
-        f.includes("news")
-    ) {
-        processCommand(
-            "latest news"
-        );
-
-    } else if (
-        f.includes("translate")
-    ) {
-        processCommand(
-            "translate hello to Telugu"
-        );
-
-    } else if (
-        f.includes("currency")
-    ) {
-        processCommand(
-            "convert 100 USD to INR"
-        );
-
-    } else if (
-        f.includes("meaning")
-    ) {
-        processCommand(
-            "meaning of artificial intelligence"
-        );
-
-    } else if (
-        f.includes("password")
-    ) {
-        processCommand(
-            "generate strong password"
-        );
-
-    } else if (
-        f.includes("search")
-    ) {
-        processCommand(
-            "search for latest technology news"
-        );
-
-    } else if (
-        f.includes("open apps") ||
-        f === "open app"
-    ) {
-        processCommand(
-            "open Google"
-        );
-
-    } else if (
-        f.includes("play songs") ||
-        f.includes("play song")
-    ) {
-        processCommand(
-            "play music"
-        );
-
-    } else if (
-        f.includes("crypto")
-    ) {
-        processCommand(
-            "Bitcoin price"
-        );
-    }
-}
-
-function setupFeatureCards() {
-    const selectors = [
-        ".feature",
-        ".feature-card",
-        ".tool",
-        ".tool-card",
-        ".feature-item",
-        ".tool-item",
-        "[data-feature]",
-        "[data-command]"
-    ];
-
-    const cards =
-        document.querySelectorAll(
-            selectors.join(",")
-        );
-
-    cards.forEach(card => {
         if (
-            card.dataset.jarvisFeatureBound ===
-            "1"
+          event.error ===
+          "not-allowed"
         ) {
-            return;
+
+          reply(
+            "Microphone permission was denied. Please allow microphone access."
+          );
+        }
+      };
+
+    recognition.onend =
+      () => {
+
+        listening = false;
+
+        micBtn.classList.remove(
+          "listening"
+        );
+
+        micBtn.setAttribute(
+          "aria-label",
+          "Activate voice input"
+        );
+      };
+
+    micBtn.addEventListener(
+      "click",
+      event => {
+
+        event.preventDefault();
+
+        try {
+
+          if (listening) {
+            recognition.stop();
+          } else {
+            recognition.start();
+          }
+
+        } catch (e) {
+          console.warn(
+            "Recognition error:",
+            e
+          );
+        }
+      }
+    );
+  }
+
+  /* =========================================================
+     MAIN EXECUTION
+     ========================================================= */
+
+  async function runCommand() {
+
+    if (busy) return;
+
+    const text =
+      clean(msg.value);
+
+    if (!text) return;
+
+    userMessage(text);
+
+    msg.value = "";
+
+    busy = true;
+
+    send.disabled = true;
+    send.textContent = "WAIT...";
+
+    try {
+
+      /*
+       * IMPORTANT:
+       * Screenshot features are handled FIRST.
+       * Therefore they do not get random AI answers.
+       */
+
+      const toolAnswer =
+        await runTool(text);
+
+      if (
+        toolAnswer !== null &&
+        toolAnswer !== undefined
+      ) {
+
+        reply(toolAnswer);
+
+        return;
+      }
+
+      /*
+       * Only unknown/general questions reach AI.
+       */
+
+      const answer =
+        await aiFallback(text);
+
+      reply(answer);
+
+    } catch (error) {
+
+      console.error(
+        "JARVIS error:",
+        error
+      );
+
+      reply(
+        "Sorry Boss, I could not complete that command."
+      );
+
+    } finally {
+
+      busy = false;
+
+      send.disabled = false;
+      send.textContent = "EXECUTE";
+
+      try {
+        msg.focus();
+      } catch {}
+    }
+  }
+
+  /* =========================================================
+     EXECUTE BUTTON
+     ========================================================= */
+
+  send.addEventListener(
+    "click",
+    event => {
+
+      event.preventDefault();
+
+      runCommand();
+    }
+  );
+
+  /* =========================================================
+     ENTER KEY
+     ========================================================= */
+
+  msg.addEventListener(
+    "keydown",
+    event => {
+
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey
+      ) {
+
+        event.preventDefault();
+
+        runCommand();
+      }
+    }
+  );
+
+  /* =========================================================
+     CLEAR MEMORY
+     ========================================================= */
+
+  if (clearBtn) {
+
+    clearBtn.addEventListener(
+      "click",
+      event => {
+
+        event.preventDefault();
+
+        clearMemory();
+      }
+    );
+  }
+
+  /* =========================================================
+     FEATURE CARDS
+     ========================================================= */
+
+  function setupFeatureCards() {
+
+    const commands = {
+
+      "time":
+        "what is the time",
+
+      "weather":
+        "weather",
+
+      "timer":
+        "timer 10 seconds",
+
+      "dice / coin":
+        "roll dice",
+
+      "dice":
+        "roll dice",
+
+      "coin":
+        "flip coin",
+
+      "joke":
+        "tell me a joke",
+
+      "quote":
+        "give me a quote",
+
+      "news":
+        "latest news",
+
+      "translate":
+        "translate hello",
+
+      "currency":
+        "100 USD to INR",
+
+      "meaning":
+        "meaning of assistant",
+
+      "password":
+        "generate password",
+
+      "search":
+        "search Google",
+
+      "open apps":
+        "open Google",
+
+      "play songs":
+        "play music",
+
+      "crypto":
+        "bitcoin price"
+    };
+
+    const elements =
+      document.querySelectorAll(
+        "body *"
+      );
+
+    elements.forEach(
+      element => {
+
+        if (
+          element.children.length > 0
+        ) {
+          return;
         }
 
-        card.dataset.jarvisFeatureBound =
-            "1";
+        const label =
+          lower(
+            element.textContent
+          );
 
-        card.addEventListener(
-            "click",
-            event => {
-                const dataCommand =
-                    card.getAttribute(
-                        "data-command"
-                    );
+        if (!commands[label]) {
+          return;
+        }
 
-                const dataFeature =
-                    card.getAttribute(
-                        "data-feature"
-                    );
+        element.style.cursor =
+          "pointer";
 
-                if (
-                    dataCommand
-                ) {
-                    processCommand(
-                        dataCommand
-                    );
+        element.addEventListener(
+          "click",
+          event => {
 
-                    return;
-                }
+            /*
+             * Do not interfere with normal
+             * buttons/input controls.
+             */
 
-                if (
-                    dataFeature
-                ) {
-                    executeFeature(
-                        dataFeature
-                    );
-
-                    return;
-                }
-
-                executeFeature(
-                    card.textContent
-                );
+            if (
+              event.target.closest(
+                "button,input"
+              )
+            ) {
+              return;
             }
+
+            msg.value =
+              commands[label];
+
+            runCommand();
+          }
         );
-    });
-}
-
-
-/* =========================================================
-   RESTORE MEMORY
-========================================================= */
-
-function restoreHistory() {
-    if (!chatBox) {
-        return;
-    }
-
-    const recent =
-        conversationHistory.slice(-12);
-
-    recent.forEach(item => {
-        addChatMessage(
-            item.text,
-            item.role === "user"
-                ? "user"
-                : "jarvis"
-        );
-    });
-}
-
-function showStartupMessage() {
-    if (
-        !chatBox ||
-        conversationHistory.length
-    ) {
-        return;
-    }
-
-    jarvisMessage(
-        "J.A.R.V.I.S online. All systems ready. Ask me anything."
+      }
     );
-}
+  }
 
+  /* =========================================================
+     STARTUP
+     ========================================================= */
 
-/* =========================================================
-   START
-========================================================= */
+  setupVoice();
 
-function initJarvis() {
-    setupInput();
-    setupVoice();
-    setupCamera();
-    setupClearMemory();
-    setupFeatureCards();
+  setupFeatureCards();
 
-    restoreHistory();
-    showStartupMessage();
+  window.jarvisRun =
+    runCommand;
 
-    syncLiveTime();
-    startLiveClock();
+  window.jarvisSpeak =
+    speak;
 
-    if (messageInput) {
-        setTimeout(() => {
-            messageInput.focus();
-        }, 150);
-    }
-}
+  window.jarvisClearMemory =
+    clearMemory;
 
-if (
-    document.readyState === "loading"
-) {
-    document.addEventListener(
-        "DOMContentLoaded",
-        initJarvis,
-        { once: true }
-    );
-} else {
-    initJarvis();
-}
+  window.jarvisAnalyzeImage =
+    analyzeImage;
+
+  window.jarvisTool =
+    runTool;
+
+  console.log(
+    "J.A.R.V.I.S. ONLINE — ALL 15 TOOLS READY"
+  );
+
+  try {
+    msg.focus();
+  } catch {}
+
+})();
