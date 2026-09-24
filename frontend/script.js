@@ -1,1918 +1,2067 @@
  /* =========================================================
-   J.A.R.V.I.S. - PERSONAL AI ASSISTANT
-   script.js - PART 1/2
+   J.A.R.V.I.S. - SCRIPT.JS
+   PART 1 / 2
+   Fast Voice + UI + Smart Command System
    ========================================================= */
 
-(() => {
-  "use strict";
+"use strict";
 
-  /* =========================================================
-     1. EXACT HTML ELEMENTS
-     ========================================================= */
+/* =========================
+   EXACT HTML ELEMENTS
+   ========================= */
 
-  const $ = (id) => document.getElementById(id);
+const chat = document.getElementById("chat");
+const msg = document.getElementById("msg");
+const send = document.getElementById("send");
+const micBtn = document.getElementById("mic-btn");
+const camBtn = document.getElementById("cam-btn");
+const clearBtn = document.getElementById("clear-btn");
+const imgInput = document.getElementById("img-input");
 
-  const chat = $("chat");
-  const msg = $("msg");
-  const send = $("send");
-  const micBtn = $("mic-btn");
-  const camBtn = $("cam-btn");
-  const clearBtn = $("clear-btn");
-  const imgInput = $("img-input");
 
-  /* =========================================================
-     2. MEMORY
-     ========================================================= */
+/* =========================
+   CONFIG
+   ========================= */
 
-  const MEMORY_KEY = "JARVIS_MEMORY_V1";
+const CONFIG = {
+    voiceLang: "en-IN",
+    voiceRate: 1.22,
+    voicePitch: 1,
+    voiceVolume: 1,
+    apiTimeout: 7000,
+    memoryKey: "jarvis_memory_v1"
+};
 
-  let memory = [];
 
-  try {
-    const saved = localStorage.getItem(MEMORY_KEY);
-    memory = saved ? JSON.parse(saved) : [];
-    if (!Array.isArray(memory)) memory = [];
-  } catch {
-    memory = [];
-  }
+/* =========================
+   VOICE ENGINE
+   ========================= */
 
-  function saveMemory() {
-    try {
-      localStorage.setItem(MEMORY_KEY, JSON.stringify(memory));
-    } catch {
-      /* Storage may be blocked */
-    }
-  }
+let voices = [];
+let selectedVoice = null;
+let speaking = false;
 
-  function remember(type, text) {
-    memory.push({
-      type,
-      text,
-      time: new Date().toISOString()
-    });
+function loadVoices() {
 
-    if (memory.length > 100) {
-      memory = memory.slice(-100);
-    }
-
-    saveMemory();
-  }
-
-  function clearMemory() {
-    memory = [];
-
-    try {
-      localStorage.removeItem(MEMORY_KEY);
-    } catch {}
-
-    addMessage(
-      "Memory cleared successfully, Boss.",
-      "jarvis"
-    );
-  }
-
-  /* =========================================================
-     3. CHAT UI
-     ========================================================= */
-
-  function addMessage(text, sender = "jarvis") {
-    if (!chat) return;
-
-    const item = document.createElement("div");
-
-    item.className =
-      sender === "user"
-        ? "message user-message"
-        : "message jarvis-message";
-
-    item.textContent = String(text);
-
-    chat.appendChild(item);
-    chat.scrollTop = chat.scrollHeight;
-  }
-
-  function addImageMessage(src, name = "Image") {
-    if (!chat) return;
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "message jarvis-message";
-
-    const title = document.createElement("div");
-    title.textContent = "IMAGE PREVIEW: " + name;
-    title.style.marginBottom = "8px";
-
-    const image = document.createElement("img");
-
-    image.src = src;
-    image.alt = name;
-
-    image.style.maxWidth = "100%";
-    image.style.maxHeight = "320px";
-    image.style.borderRadius = "10px";
-    image.style.display = "block";
-    image.style.objectFit = "contain";
-
-    wrapper.appendChild(title);
-    wrapper.appendChild(image);
-
-    chat.appendChild(wrapper);
-    chat.scrollTop = chat.scrollHeight;
-  }
-
-  function setInput(value) {
-    if (msg) {
-      msg.value = value;
-      msg.focus();
-    }
-  }
-
-  function speak(text) {
     if (!("speechSynthesis" in window)) return;
 
+    voices = speechSynthesis.getVoices();
+
+    selectedVoice =
+        voices.find(v => v.lang === "en-IN") ||
+        voices.find(v => v.lang === "en-GB") ||
+        voices.find(v => v.lang === "en-US") ||
+        voices.find(v => /^en/i.test(v.lang)) ||
+        voices[0] ||
+        null;
+}
+
+loadVoices();
+
+if ("speechSynthesis" in window) {
+    speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+
+/* =========================
+   FAST SPEAK
+   ========================= */
+
+function speak(text) {
+
+    if (!("speechSynthesis" in window)) return;
+    if (!text) return;
+
+    const clean = String(text)
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (!clean) return;
+
+    /*
+       Cancel previous queue immediately.
+       This prevents old responses waiting in queue.
+    */
+    speechSynthesis.cancel();
+
+    const u = new SpeechSynthesisUtterance(clean);
+
+    u.lang =
+        selectedVoice?.lang ||
+        CONFIG.voiceLang;
+
+    u.rate = CONFIG.voiceRate;
+    u.pitch = CONFIG.voicePitch;
+    u.volume = CONFIG.voiceVolume;
+
+    if (selectedVoice) {
+        u.voice = selectedVoice;
+    }
+
+    u.onstart = () => {
+        speaking = true;
+    };
+
+    u.onend = () => {
+        speaking = false;
+    };
+
+    u.onerror = () => {
+        speaking = false;
+    };
+
+    /*
+       Start without unnecessary delay.
+    */
+    speechSynthesis.speak(u);
+}
+
+
+/* =========================
+   STOP SPEAKING
+   ========================= */
+
+function stopSpeaking() {
+
+    if ("speechSynthesis" in window) {
+        speechSynthesis.cancel();
+    }
+
+    speaking = false;
+}
+
+
+/* =========================
+   MEMORY
+   ========================= */
+
+let memory = [];
+
+try {
+    memory =
+        JSON.parse(
+            localStorage.getItem(CONFIG.memoryKey)
+        ) || [];
+} catch {
+    memory = [];
+}
+
+
+function remember(role, text) {
+
+    memory.push({
+        role,
+        text: String(text),
+        time: Date.now()
+    });
+
+    /*
+       Keep memory small for faster operation.
+    */
+    if (memory.length > 50) {
+        memory = memory.slice(-50);
+    }
+
     try {
-      window.speechSynthesis.cancel();
-
-      const utterance =
-        new SpeechSynthesisUtterance(String(text));
-
-      utterance.lang = "en-IN";
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-
-      window.speechSynthesis.speak(utterance);
+        localStorage.setItem(
+            CONFIG.memoryKey,
+            JSON.stringify(memory)
+        );
     } catch {}
-  }
+}
 
-  function reply(text, voice = false) {
-    addMessage(text, "jarvis");
-    remember("assistant", text);
+
+function clearMemory() {
+
+    memory = [];
+
+    try {
+        localStorage.removeItem(
+            CONFIG.memoryKey
+        );
+    } catch {}
+
+    if (chat) {
+        chat.innerHTML = "";
+    }
+
+    addMessage(
+        "Memory cleared, Boss.",
+        "jarvis"
+    );
+}
+
+
+/* =========================
+   CHAT UI
+   ========================= */
+
+function addMessage(text, type = "jarvis") {
+
+    if (!chat) return;
+
+    const div =
+        document.createElement("div");
+
+    div.className =
+        type === "user"
+            ? "message user"
+            : "message jarvis";
+
+    div.textContent =
+        String(text);
+
+    chat.appendChild(div);
+
+    /*
+       Instant scroll.
+    */
+    chat.scrollTop =
+        chat.scrollHeight;
+
+    return div;
+}
+
+
+/* =========================
+   SAFE API FETCH
+   ========================= */
+
+async function fetchJSON(
+    url,
+    options = {},
+    timeout = CONFIG.apiTimeout
+) {
+
+    const controller =
+        new AbortController();
+
+    const timer =
+        setTimeout(
+            () => controller.abort(),
+            timeout
+        );
+
+    try {
+
+        const response =
+            await fetch(url, {
+                ...options,
+                signal:
+                    controller.signal
+            });
+
+        if (!response.ok) {
+            throw new Error(
+                "HTTP " + response.status
+            );
+        }
+
+        return await response.json();
+
+    } finally {
+
+        clearTimeout(timer);
+    }
+}
+
+
+/* =========================
+   TEXT NORMALIZATION
+   ========================= */
+
+function normalize(text) {
+
+    return String(text || "")
+        .toLowerCase()
+        .replace(/[.,!?;:()[\]{}]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+
+/* =========================
+   SMART WORD CORRECTION
+   ========================= */
+
+const COMMAND_WORDS = [
+
+    "time",
+    "weather",
+    "timer",
+    "dice",
+    "roll",
+    "coin",
+    "toss",
+    "joke",
+    "quote",
+    "news",
+    "translate",
+    "currency",
+    "convert",
+    "dictionary",
+    "define",
+    "password",
+    "generate",
+    "search",
+    "google",
+    "youtube",
+    "play",
+    "crypto",
+    "bitcoin",
+    "ethereum",
+    "open",
+    "camera",
+    "clear",
+    "memory",
+    "hello",
+    "hi",
+    "hey"
+];
+
+
+/* =========================
+   LEVENSHTEIN
+   ========================= */
+
+function distance(a, b) {
+
+    if (a === b) return 0;
+
+    const dp =
+        Array.from(
+            { length: a.length + 1 },
+            () =>
+                new Array(
+                    b.length + 1
+                ).fill(0)
+        );
+
+    for (let i = 0; i <= a.length; i++) {
+        dp[i][0] = i;
+    }
+
+    for (let j = 0; j <= b.length; j++) {
+        dp[0][j] = j;
+    }
+
+    for (let i = 1; i <= a.length; i++) {
+
+        for (let j = 1; j <= b.length; j++) {
+
+            dp[i][j] =
+                a[i - 1] === b[j - 1]
+                    ? dp[i - 1][j - 1]
+                    : 1 +
+                      Math.min(
+                          dp[i - 1][j],
+                          dp[i][j - 1],
+                          dp[i - 1][j - 1]
+                      );
+        }
+    }
+
+    return dp[a.length][b.length];
+}
+
+
+/* =========================
+   SMART CORRECTION
+   ========================= */
+
+function smartCorrect(text) {
+
+    let words =
+        normalize(text)
+            .split(" ")
+            .filter(Boolean);
+
+    const aliases = {
+
+        "wether": "weather",
+        "wheather": "weather",
+        "weater": "weather",
+
+        "timmer": "timer",
+        "timar": "timer",
+        "tymer": "timer",
+
+        "dic": "dice",
+        "dyce": "dice",
+
+        "coine": "coin",
+        "con": "coin",
+
+        "jock": "joke",
+        "jok": "joke",
+
+        "qoute": "quote",
+        "quate": "quote",
+
+        "newz": "news",
+        "nwes": "news",
+
+        "translet": "translate",
+        "tranlate": "translate",
+
+        "currancy": "currency",
+        "curency": "currency",
+
+        "dictinary": "dictionary",
+        "dictionery": "dictionary",
+
+        "pasword": "password",
+        "passwrd": "password",
+
+        "serch": "search",
+        "seach": "search",
+
+        "youtub": "youtube",
+        "utube": "youtube",
+
+        "plaay": "play",
+        "pley": "play",
+
+        "bitcon": "bitcoin",
+        "bitcion": "bitcoin",
+
+        "etherium": "ethereum",
+        "ethrium": "ethereum",
+
+        "memry": "memory",
+        "cleer": "clear"
+    };
+
+    words =
+        words.map(word => {
+
+            if (aliases[word]) {
+                return aliases[word];
+            }
+
+            if (word.length < 4) {
+                return word;
+            }
+
+            let best = word;
+            let bestDistance = 2;
+
+            for (const candidate of COMMAND_WORDS) {
+
+                const d =
+                    distance(
+                        word,
+                        candidate
+                    );
+
+                if (
+                    d < bestDistance
+                ) {
+                    bestDistance = d;
+                    best = candidate;
+                }
+            }
+
+            return best;
+        });
+
+    return words.join(" ");
+}
+
+
+/* =========================
+   RESPONSE HELPER
+   ========================= */
+
+function respond(text, voice = false) {
+
+    addMessage(
+        text,
+        "jarvis"
+    );
+
+    remember(
+        "assistant",
+        text
+    );
 
     if (voice) {
-      speak(text);
+
+        /*
+           UI gets rendered first,
+           then voice starts immediately.
+        */
+        setTimeout(
+            () => speak(text),
+            0
+        );
     }
 
     return text;
-  }
+}
 
-  /* =========================================================
-     4. TEXT NORMALIZATION
-     ========================================================= */
 
-  function normalizeText(text) {
-    return String(text || "")
-      .toLowerCase()
-      .normalize("NFKC")
-      .replace(/[!?.,;:()[\]{}"'`]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
+/* =========================
+   TIME
+   ========================= */
 
-  function cleanCommand(text) {
-    return normalizeText(text)
-      .replace(
-        /^(hey|hi|hello|jarvis|jervis|jarvies|jarviss|boss)\s+/i,
-        ""
-      )
-      .trim();
-  }
-
-  /* =========================================================
-     5. SMART SPELLING / VOICE MISTAKE CORRECTION
-     ========================================================= */
-
-  function levenshtein(a, b) {
-    a = String(a);
-    b = String(b);
-
-    const matrix = [];
-
-    for (let i = 0; i <= b.length; i++) {
-      matrix[i] = [i];
-    }
-
-    for (let j = 0; j <= a.length; j++) {
-      matrix[0][j] = j;
-    }
-
-    for (let i = 1; i <= b.length; i++) {
-      for (let j = 1; j <= a.length; j++) {
-        if (b.charAt(i - 1) === a.charAt(j - 1)) {
-          matrix[i][j] = matrix[i - 1][j - 1];
-        } else {
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j] + 1,
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j - 1] + 1
-          );
-        }
-      }
-    }
-
-    return matrix[b.length][a.length];
-  }
-
-  const commandAliases = {
-    time: [
-      "time",
-      "tim",
-      "tym",
-      "what time",
-      "current time",
-      "samayam",
-      "సమయం"
-    ],
-
-    weather: [
-      "weather",
-      "wether",
-      "wheather",
-      "whether",
-      "climate",
-      "temperature",
-      "vaathavaranam",
-      "వాతావరణం"
-    ],
-
-    timer: [
-      "timer",
-      "timr",
-      "tmier",
-      "alarm",
-      "countdown",
-      "టైమర్"
-    ],
-
-    dice: [
-      "dice",
-      "die",
-      "roll dice",
-      "rol dice",
-      "dise"
-    ],
-
-    coin: [
-      "coin",
-      "coin toss",
-      "coin flip",
-      "toss coin",
-      "heads tails",
-      "con toss"
-    ],
-
-    joke: [
-      "joke",
-      "jok",
-      "jokes",
-      "make me laugh",
-      "funny"
-    ],
-
-    quote: [
-      "quote",
-      "quate",
-      "quotation",
-      "motivation",
-      "motivational quote"
-    ],
-
-    news: [
-      "news",
-      "newz",
-      "new",
-      "latest news",
-      "headlines"
-    ],
-
-    translate: [
-      "translate",
-      "translat",
-      "tranlate",
-      "translation",
-      "telugu translation"
-    ],
-
-    currency: [
-      "currency",
-      "convert currency",
-      "exchange rate",
-      "forex",
-      "money conversion"
-    ],
-
-    dictionary: [
-      "dictionary",
-      "dictonary",
-      "meaning",
-      "define",
-      "definition",
-      "word meaning"
-    ],
-
-    password: [
-      "password",
-      "pass word",
-      "generate password",
-      "password generator",
-      "secure password"
-    ],
-
-    search: [
-      "search",
-      "serch",
-      "google",
-      "find",
-      "look up",
-      "lookup"
-    ],
-
-    youtube: [
-      "youtube",
-      "you tube",
-      "youtub",
-      "play song",
-      "play music",
-      "play video",
-      "song"
-    ],
-
-    crypto: [
-      "crypto",
-      "cryptocurrency",
-      "bitcoin",
-      "btc",
-      "ethereum",
-      "eth",
-      "crypto price"
-    ],
-
-    camera: [
-      "camera",
-      "camra",
-      "take photo",
-      "take picture",
-      "capture photo",
-      "open camera"
-    ],
-
-    clear: [
-      "clear memory",
-      "clear mem",
-      "delete memory",
-      "erase memory",
-      "forget memory",
-      "reset memory"
-    ]
-  };
-
-  function detectCorrectedCommand(text) {
-    const normalized = normalizeText(text);
-
-    /* Exact / contains match first */
-    for (const [command, aliases] of Object.entries(commandAliases)) {
-      for (const alias of aliases) {
-        const a = normalizeText(alias);
-
-        if (
-          normalized === a ||
-          normalized.includes(a)
-        ) {
-          return command;
-        }
-      }
-    }
-
-    /* Word-level fuzzy correction */
-    const words = normalized.split(/\s+/);
-
-    let bestCommand = null;
-    let bestScore = Infinity;
-
-    for (const word of words) {
-      if (!word || word.length < 3) continue;
-
-      for (const [command, aliases] of Object.entries(
-        commandAliases
-      )) {
-        for (const alias of aliases) {
-          const cleanAlias = normalizeText(alias);
-
-          if (cleanAlias.includes(" ")) continue;
-
-          const distance = levenshtein(word, cleanAlias);
-
-          const maxDistance =
-            cleanAlias.length >= 7 ? 2 : 1;
-
-          if (
-            distance <= maxDistance &&
-            distance < bestScore
-          ) {
-            bestScore = distance;
-            bestCommand = command;
-          }
-        }
-      }
-    }
-
-    return bestCommand;
-  }
-
-  function hasCommand(text, command) {
-    const t = normalizeText(text);
-
-    const aliases =
-      commandAliases[command] || [command];
-
-    return aliases.some((alias) =>
-      t.includes(normalizeText(alias))
-    );
-  }
-
-  /* =========================================================
-     6. TIME
-     ========================================================= */
-
-  function getTime() {
-    const now = new Date();
+function getTime() {
 
     return (
-      "The current time is " +
-      now.toLocaleTimeString([], {
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit"
-      }) +
-      ", Boss."
+        "The time is " +
+        new Date()
+            .toLocaleTimeString(
+                "en-IN",
+                {
+                    hour: "numeric",
+                    minute: "2-digit"
+                }
+            ) +
+        ", Boss."
     );
-  }
+}
 
-  /* =========================================================
-     7. WEATHER
-     ========================================================= */
 
-  async function getWeather() {
-    if (!navigator.geolocation) {
-      return "Geolocation is not supported by this browser, Boss.";
+/* =========================
+   WEATHER
+   ========================= */
+
+async function getWeather() {
+
+    if (
+        !navigator.geolocation
+    ) {
+        return "Location is not available, Boss.";
     }
 
-    return new Promise((resolve) => {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          try {
-            const lat =
-              position.coords.latitude;
+    return new Promise(resolve => {
 
-            const lon =
-              position.coords.longitude;
-
-            const url =
-              "https://api.open-meteo.com/v1/forecast" +
-              "?latitude=" +
-              encodeURIComponent(lat) +
-              "&longitude=" +
-              encodeURIComponent(lon) +
-              "&current=temperature_2m,relative_humidity_2m," +
-              "apparent_temperature,weather_code,wind_speed_10m";
-
-            const response =
-              await fetch(url);
-
-            if (!response.ok) {
-              throw new Error("Weather request failed");
-            }
-
-            const data =
-              await response.json();
-
-            const current =
-              data.current || {};
-
-            const temperature =
-              current.temperature_2m;
-
-            const feels =
-              current.apparent_temperature;
-
-            const humidity =
-              current.relative_humidity_2m;
-
-            const wind =
-              current.wind_speed_10m;
-
-            resolve(
-              "Current weather: " +
-              temperature +
-              "°C, feels like " +
-              feels +
-              "°C, humidity " +
-              humidity +
-              "%, wind " +
-              wind +
-              " km/h, Boss."
+        const timer =
+            setTimeout(
+                () => {
+                    resolve(
+                        "Weather location request timed out, Boss."
+                    );
+                },
+                5000
             );
-          } catch {
-            resolve(
-              "I could not retrieve the weather right now, Boss."
+
+        navigator.geolocation
+            .getCurrentPosition(
+
+                async position => {
+
+                    clearTimeout(timer);
+
+                    try {
+
+                        const lat =
+                            position.coords.latitude;
+
+                        const lon =
+                            position.coords.longitude;
+
+                        const url =
+                            "https://api.open-meteo.com/v1/forecast" +
+                            "?latitude=" + lat +
+                            "&longitude=" + lon +
+                            "&current=temperature_2m,weather_code" +
+                            "&timezone=auto";
+
+                        const data =
+                            await fetchJSON(url);
+
+                        const temp =
+                            data?.current?.temperature_2m;
+
+                        if (
+                            temp === undefined
+                        ) {
+                            resolve(
+                                "Weather data is unavailable, Boss."
+                            );
+                            return;
+                        }
+
+                        resolve(
+                            `Current temperature is ${temp} degrees Celsius, Boss.`
+                        );
+
+                    } catch {
+
+                        resolve(
+                            "I could not get the weather right now, Boss."
+                        );
+                    }
+                },
+
+                () => {
+
+                    clearTimeout(timer);
+
+                    resolve(
+                        "Please allow location permission for weather, Boss."
+                    );
+                },
+
+                {
+                    enableHighAccuracy: false,
+                    timeout: 4500,
+                    maximumAge: 300000
+                }
             );
-          }
-        },
-
-        () => {
-          resolve(
-            "I need location permission to check the weather, Boss."
-          );
-        },
-
-        {
-          enableHighAccuracy: false,
-          timeout: 10000,
-          maximumAge: 300000
-        }
-      );
     });
-  }
+}
 
-  /* =========================================================
-     8. TIMER
-     ========================================================= */
 
-  function parseTimer(text) {
-    const t = normalizeText(text);
+/* =========================
+   TIMER
+   ========================= */
 
-    const match = t.match(
-      /(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b/i
-    );
+function createTimer(text) {
 
-    if (!match) return null;
-
-    const amount = Number(match[1]);
-    const unit = match[2].toLowerCase();
-
-    let multiplier = 1000;
-
-    if (
-      unit.startsWith("minute") ||
-      unit === "min" ||
-      unit === "mins" ||
-      unit === "m"
-    ) {
-      multiplier = 60000;
-    }
-
-    if (
-      unit.startsWith("hour") ||
-      unit === "hr" ||
-      unit === "hrs" ||
-      unit === "h"
-    ) {
-      multiplier = 3600000;
-    }
-
-    return {
-      amount,
-      unit,
-      duration: amount * multiplier
-    };
-  }
-
-  function startTimer(text) {
-    const parsed = parseTimer(text);
-
-    if (!parsed) {
-      return "Please specify a timer duration, for example: timer 10 seconds.";
-    }
-
-    const { amount, unit, duration } = parsed;
-
-    window.setTimeout(() => {
-      const message =
-        "Timer complete, Boss. " +
-        amount +
-        " " +
-        unit +
-        " finished.";
-
-      addMessage(message, "jarvis");
-      speak(message);
-    }, duration);
-
-    return (
-      "Timer set for " +
-      amount +
-      " " +
-      unit +
-      ", Boss."
-    );
-  }
-
-  /* =========================================================
-     9. DICE
-     ========================================================= */
-
-  function rollDice(text) {
     const match =
-      normalizeText(text).match(
-        /(?:dice|die|roll)\s*(\d+)?/i
-      );
-
-    const sides =
-      match && match[1]
-        ? Math.max(2, Number(match[1]))
-        : 6;
-
-    const result =
-      Math.floor(Math.random() * sides) + 1;
-
-    return (
-      "Dice rolled: " +
-      result +
-      " out of " +
-      sides +
-      ", Boss."
-    );
-  }
-
-  /* =========================================================
-     10. COIN TOSS
-     ========================================================= */
-
-  function tossCoin() {
-    const result =
-      Math.random() < 0.5
-        ? "Heads"
-        : "Tails";
-
-    return "Coin toss result: " + result + ", Boss.";
-  }
-
-  /* =========================================================
-     11. JOKE
-     ========================================================= */
-
-  async function getJoke() {
-    try {
-      const response = await fetch(
-        "https://v2.jokeapi.dev/joke/Any?type=single"
-      );
-
-      if (!response.ok) {
-        throw new Error("Joke failed");
-      }
-
-      const data = await response.json();
-
-      if (data.joke) {
-        return data.joke;
-      }
-
-      throw new Error("No joke");
-    } catch {
-      const fallback = [
-        "Why do programmers prefer dark mode? Because light attracts bugs.",
-        "I told my computer I needed a break. Now it keeps sending me vacation ads.",
-        "Why was the JavaScript developer calm? Because they knew how to handle their callbacks."
-      ];
-
-      return fallback[
-        Math.floor(Math.random() * fallback.length)
-      ];
-    }
-  }
-
-  /* =========================================================
-     12. QUOTE
-     ========================================================= */
-
-  async function getQuote() {
-    try {
-      const response = await fetch(
-        "https://api.quotable.io/random"
-      );
-
-      if (!response.ok) {
-        throw new Error("Quote failed");
-      }
-
-      const data = await response.json();
-
-      if (data.content) {
-        return (
-          '"' +
-          data.content +
-          '"' +
-          (data.author
-            ? " — " + data.author
-            : "")
+        normalize(text).match(
+            /(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)/
         );
-      }
-
-      throw new Error("No quote");
-    } catch {
-      return (
-        '"Success is the sum of small efforts, repeated consistently."'
-      );
-    }
-  }
-
-  /* =========================================================
-     13. NEWS
-     ========================================================= */
-
-  function newsSearch(text) {
-    let query = normalizeText(text)
-      .replace(/\b(latest|news|newz|headlines)\b/gi, "")
-      .trim();
-
-    if (!query) {
-      query = "latest news";
-    }
-
-    const url =
-      "https://news.google.com/search?q=" +
-      encodeURIComponent(query);
-
-    window.open(url, "_blank", "noopener,noreferrer");
-
-    return (
-      "Opening the latest news for " +
-      query +
-      ", Boss."
-    );
-  }
-
-  /* =========================================================
-     14. TRANSLATION
-     ========================================================= */
-
-  async function translateText(text) {
-    let query = String(text)
-      .replace(
-        /^(translate|translation|translat)\s*/i,
-        ""
-      )
-      .trim();
-
-    query = query
-      .replace(/^this\s*/i, "")
-      .trim();
-
-    if (!query) {
-      return "Tell me what you want me to translate, Boss.";
-    }
-
-    try {
-      const url =
-        "https://api.mymemory.translated.net/get?q=" +
-        encodeURIComponent(query) +
-        "&langpair=en|te";
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error("Translation failed");
-      }
-
-      const data = await response.json();
-
-      const result =
-        data &&
-        data.responseData &&
-        data.responseData.translatedText;
-
-      if (!result) {
-        throw new Error("No translation");
-      }
-
-      return "In Telugu: " + result;
-    } catch {
-      return (
-        "Translation service is unavailable right now, Boss."
-      );
-    }
-  }
-
-  /* =========================================================
-     15. CURRENCY
-     ========================================================= */
-
-  async function currencyConvert(text) {
-    const t = normalizeText(text);
-
-    const match = t.match(
-      /(\d+(?:\.\d+)?)\s*([a-z]{3})\s*(?:to|in)\s*([a-z]{3})/i
-    );
 
     if (!match) {
-      return (
-        "Use currency like: 100 USD to INR, Boss."
-      );
+        return "Tell me the timer duration, Boss.";
     }
 
-    const amount = Number(match[1]);
-    const from = match[2].toUpperCase();
-    const to = match[3].toUpperCase();
+    const amount =
+        Number(match[1]);
+
+    const unit =
+        match[2];
+
+    let milliseconds;
+
+    if (
+        /hour|hr|^h$/.test(unit)
+    ) {
+        milliseconds =
+            amount * 60 * 60 * 1000;
+    } else if (
+        /minute|min|^m$/.test(unit)
+    ) {
+        milliseconds =
+            amount * 60 * 1000;
+    } else {
+        milliseconds =
+            amount * 1000;
+    }
+
+    if (milliseconds > 86400000) {
+        return "The maximum timer is 24 hours, Boss.";
+    }
+
+    setTimeout(() => {
+
+        speak(
+            `Timer finished. ${amount} ${unit}, Boss.`
+        );
+
+        addMessage(
+            `Timer finished: ${amount} ${unit}.`,
+            "jarvis"
+        );
+
+    }, milliseconds);
+
+    return `Timer set for ${amount} ${unit}, Boss.`;
+}
+
+
+/* =========================
+   DICE
+   ========================= */
+
+function rollDice() {
+
+    const result =
+        Math.floor(
+            Math.random() * 6
+        ) + 1;
+
+    return `Dice rolled ${result}, Boss.`;
+}
+
+
+/* =========================
+   COIN
+   ========================= */
+
+function tossCoin() {
+
+    const result =
+        Math.random() < 0.5
+            ? "Heads"
+            : "Tails";
+
+    return `Coin toss result: ${result}, Boss.`;
+}
+
+
+/* =========================
+   JOKE
+   ========================= */
+
+async function getJoke() {
 
     try {
-      const url =
-        "https://api.frankfurter.app/latest?amount=" +
-        encodeURIComponent(amount) +
-        "&from=" +
-        encodeURIComponent(from) +
-        "&to=" +
-        encodeURIComponent(to);
 
-      const response = await fetch(url);
+        const data =
+            await fetchJSON(
+                "https://official-joke-api.appspot.com/random_joke",
+                {},
+                5000
+            );
 
-      if (!response.ok) {
-        throw new Error("Currency failed");
-      }
+        return (
+            `${data.setup} ${data.punchline}`
+        );
 
-      const data = await response.json();
-
-      if (
-        !data.rates ||
-        typeof data.rates[to] !== "number"
-      ) {
-        throw new Error("Currency unavailable");
-      }
-
-      return (
-        amount +
-        " " +
-        from +
-        " = " +
-        data.rates[to] +
-        " " +
-        to +
-        ", Boss."
-      );
     } catch {
-      return (
-        "I could not retrieve that currency conversion right now, Boss."
-      );
+
+        return "Why did the computer go to the doctor? Because it had a virus, Boss.";
     }
-  }
+}
 
-  /* =========================================================
-     16. DICTIONARY
-     ========================================================= */
 
-  async function dictionary(text) {
-    let word = normalizeText(text)
-      .replace(
-        /^(dictionary|define|meaning|definition|word meaning)\s*/i,
-        ""
-      )
-      .trim();
+/* =========================
+   QUOTE
+   ========================= */
+
+async function getQuote() {
+
+    try {
+
+        const data =
+            await fetchJSON(
+                "https://dummyjson.com/quotes/random",
+                {},
+                5000
+            );
+
+        return (
+            `"${data.quote}" — ${data.author}`
+        );
+
+    } catch {
+
+        return (
+            `"The secret of getting ahead is getting started."`
+        );
+    }
+}
+
+
+/* =========================
+   DICTIONARY
+   ========================= */
+
+async function dictionary(word) {
+
+    word =
+        String(word)
+            .trim()
+            .split(/\s+/)[0];
 
     if (!word) {
-      return "Tell me the word you want defined, Boss.";
+        return "Tell me the word you want defined, Boss.";
     }
-
-    word = word.split(/\s+/)[0];
 
     try {
-      const response = await fetch(
-        "https://api.dictionaryapi.dev/api/v2/entries/en/" +
-        encodeURIComponent(word)
-      );
 
-      if (!response.ok) {
-        throw new Error("Dictionary failed");
-      }
+        const data =
+            await fetchJSON(
+                `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
+                {},
+                5000
+            );
 
-      const data = await response.json();
+        const meaning =
+            data?.[0]
+                ?.meanings?.[0]
+                ?.definitions?.[0]
+                ?.definition;
 
-      const entry = data[0];
+        return meaning
+            ? `${word}: ${meaning}`
+            : `I could not find a definition for ${word}, Boss.`;
 
-      const meaning =
-        entry &&
-        entry.meanings &&
-        entry.meanings[0];
-
-      const definition =
-        meaning &&
-        meaning.definitions &&
-        meaning.definitions[0] &&
-        meaning.definitions[0].definition;
-
-      if (!definition) {
-        throw new Error("No definition");
-      }
-
-      return (
-        word +
-        ": " +
-        definition
-      );
     } catch {
-      return (
-        "I could not find a definition for " +
-        word +
-        ", Boss."
-      );
+
+        return `I could not find a definition for ${word}, Boss.`;
     }
-  }
+}
 
-  /* =========================================================
-     17. PASSWORD GENERATOR
-     ========================================================= */
 
-  function generatePassword(text) {
-    const match =
-      normalizeText(text).match(
-        /(?:password|pass word).{0,20}?(\d{1,3})/
-      );
+/* =========================
+   PASSWORD
+   ========================= */
 
-    let length =
-      match && match[1]
-        ? Number(match[1])
-        : 16;
+function generatePassword(length = 16) {
 
-    length = Math.min(
-      Math.max(length, 8),
-      64
-    );
+    length =
+        Math.max(
+            8,
+            Math.min(
+                64,
+                Number(length) || 16
+            )
+        );
 
     const chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-      "abcdefghijklmnopqrstuvwxyz" +
-      "0123456789!@#$%^&*()_+-=[]{}";
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+        "abcdefghijklmnopqrstuvwxyz" +
+        "0123456789!@#$%^&*_-+=";
 
     let password = "";
 
-    if (
-      window.crypto &&
-      window.crypto.getRandomValues
-    ) {
-      const values =
+    const array =
         new Uint32Array(length);
 
-      window.crypto.getRandomValues(values);
+    crypto.getRandomValues(array);
 
-      for (let i = 0; i < length; i++) {
+    for (let i = 0; i < length; i++) {
+
         password +=
-          chars[values[i] % chars.length];
-      }
-    } else {
-      for (let i = 0; i < length; i++) {
-        password +=
-          chars[
-            Math.floor(
-              Math.random() * chars.length
+            chars[
+                array[i] %
+                chars.length
+            ];
+    }
+
+    return `Generated password: ${password}`;
+}
+
+
+/* =========================
+   OPEN SEARCH
+   ========================= */
+
+function webSearch(query) {
+
+    query =
+        query.trim();
+
+    if (!query) {
+        return "Tell me what you want me to search, Boss.";
+    }
+
+    window.open(
+        "https://www.google.com/search?q=" +
+        encodeURIComponent(query),
+        "_blank"
+    );
+
+    return `Searching for ${query}, Boss.`;
+}
+
+
+/* =========================
+   YOUTUBE
+   ========================= */
+
+function youtubeSearch(query) {
+
+    query =
+        query
+            .replace(
+                /^(play|youtube)\s*/i,
+                ""
             )
-          ];
-      }
-    }
-
-    return (
-      "Generated password (" +
-      length +
-      " characters): " +
-      password
-    );
-  }
-   /* =========================================================
-     18. GOOGLE SEARCH
-     ========================================================= */
-
-  function webSearch(text) {
-    let query = normalizeText(text)
-      .replace(
-        /^(search|serch|google|find|look up|lookup)\s*/i,
-        ""
-      )
-      .trim();
+            .trim();
 
     if (!query) {
-      return "What should I search for, Boss?";
+        return "Tell me the song name, Boss.";
     }
 
-    const url =
-      "https://www.google.com/search?q=" +
-      encodeURIComponent(query);
-
-    window.open(url, "_blank", "noopener,noreferrer");
-
-    return (
-      "Searching Google for " +
-      query +
-      ", Boss."
+    window.open(
+        "https://www.youtube.com/results?search_query=" +
+        encodeURIComponent(query),
+        "_blank"
     );
-  }
 
-  /* =========================================================
-     19. YOUTUBE SEARCH / PLAY SONG
-     ========================================================= */
+    return `Searching YouTube for ${query}, Boss.`;
+}
 
-  function youtubePlay(text) {
-    let query = normalizeText(text)
-      .replace(
-        /^(play|youtube|you tube|song|music)\s*/i,
-        ""
-      )
-      .replace(
-        /^(on youtube|in youtube)\s*/i,
-        ""
-      )
-      .trim();
+
+/* =========================
+   LOCAL CHAT
+   ========================= */
+
+function localChat(text) {
+
+    const t =
+        normalize(text);
+
+    if (
+        /^(hi|hello|hey|hii|helo)\b/.test(t)
+    ) {
+        return "Hello Boss. J.A.R.V.I.S. is online.";
+    }
+
+    if (
+        t.includes("who are you")
+    ) {
+        return "I am J.A.R.V.I.S., your personal AI assistant.";
+    }
+
+    if (
+        t.includes("how are you")
+    ) {
+        return "All systems are operational, Boss.";
+    }
+
+    if (
+        t.includes("thank")
+    ) {
+        return "You're welcome, Boss.";
+    }
+
+    if (
+        t.includes("good morning")
+    ) {
+        return "Good morning, Boss.";
+    }
+
+    if (
+        t.includes("good night")
+    ) {
+        return "Good night, Boss.";
+    }
+
+    return null;
+}
+/* =========================================================
+   J.A.R.V.I.S. - SCRIPT.JS
+   PART 2 / 2
+   Tools + Mic + Camera + Image + Execute
+   ========================================================= */
+
+
+/* =========================
+   TRANSLATE
+   ========================= */
+
+async function translateText(text) {
+
+    let query =
+        text.replace(
+            /^translate\s*/i,
+            ""
+        ).trim();
 
     if (!query) {
-      return "Tell me the song or video name, Boss.";
+        return "Tell me what you want translated, Boss.";
     }
 
-    const url =
-      "https://www.youtube.com/results?search_query=" +
-      encodeURIComponent(query);
+    try {
 
-    window.open(url, "_blank", "noopener,noreferrer");
+        const url =
+            "https://api.mymemory.translated.net/get" +
+            "?q=" +
+            encodeURIComponent(query) +
+            "&langpair=en|te";
 
-    return (
-      "Opening YouTube search for " +
-      query +
-      ", Boss."
-    );
-  }
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                6000
+            );
 
-  /* =========================================================
-     20. CRYPTO
-     ========================================================= */
+        const result =
+            data?.responseData
+                ?.translatedText;
 
-  async function cryptoInfo(text) {
-    const t = normalizeText(text);
+        if (!result) {
+            throw new Error();
+        }
+
+        return `In Telugu: ${result}`;
+
+    } catch {
+
+        return "Translation service is unavailable right now, Boss.";
+    }
+}
+
+
+/* =========================
+   CURRENCY
+   ========================= */
+
+async function currencyConvert(text) {
+
+    const match =
+        text.match(
+            /(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s*(?:to|in)\s*([A-Za-z]{3})/i
+        );
+
+    if (!match) {
+
+        return (
+            "Use a command like: " +
+            "100 USD to INR, Boss."
+        );
+    }
+
+    const amount =
+        Number(match[1]);
+
+    const from =
+        match[2].toUpperCase();
+
+    const to =
+        match[3].toUpperCase();
+
+    try {
+
+        const url =
+            `https://api.frankfurter.app/latest?amount=${amount}&from=${from}&to=${to}`;
+
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                5000
+            );
+
+        const result =
+            data?.rates?.[to];
+
+        if (result === undefined) {
+            throw new Error();
+        }
+
+        return (
+            `${amount} ${from} is approximately ` +
+            `${result} ${to}, Boss.`
+        );
+
+    } catch {
+
+        return "Currency conversion is unavailable right now, Boss.";
+    }
+}
+
+
+/* =========================
+   CRYPTO
+   ========================= */
+
+async function cryptoInfo(text) {
+
+    const normalized =
+        normalize(text);
 
     let coin = "bitcoin";
 
     if (
-      /\b(ethereum|eth)\b/i.test(t)
+        normalized.includes("ethereum") ||
+        normalized.includes("eth")
     ) {
-      coin = "ethereum";
-    } else if (
-      /\b(sol|solana)\b/i.test(t)
+        coin = "ethereum";
+    }
+
+    if (
+        normalized.includes("dogecoin") ||
+        normalized.includes("doge")
     ) {
-      coin = "solana";
-    } else if (
-      /\b(doge|dogecoin)\b/i.test(t)
+        coin = "dogecoin";
+    }
+
+    if (
+        normalized.includes("solana") ||
+        normalized.includes("sol")
     ) {
-      coin = "dogecoin";
-    } else if (
-      /\b(xrp)\b/i.test(t)
-    ) {
-      coin = "ripple";
-    } else if (
-      /\b(bnb)\b/i.test(t)
-    ) {
-      coin = "binancecoin";
+        coin = "solana";
     }
 
     try {
-      const url =
-        "https://api.coingecko.com/api/v3/simple/price" +
-        "?ids=" +
-        encodeURIComponent(coin) +
-        "&vs_currencies=usd,inr" +
-        "&include_24hr_change=true";
 
-      const response = await fetch(url);
+        const url =
+            "https://api.coingecko.com/api/v3/simple/price" +
+            `?ids=${coin}&vs_currencies=usd,inr`;
 
-      if (!response.ok) {
-        throw new Error("Crypto failed");
-      }
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                6000
+            );
 
-      const data = await response.json();
+        const price =
+            data?.[coin];
 
-      const coinData = data[coin];
-
-      if (!coinData) {
-        throw new Error("Crypto unavailable");
-      }
-
-      const usd = coinData.usd;
-      const inr = coinData.inr;
-      const change =
-        coinData.usd_24h_change;
-
-      return (
-        coin.toUpperCase() +
-        " price: $" +
-        usd +
-        " / ₹" +
-        inr +
-        ". 24h change: " +
-        (typeof change === "number"
-          ? change.toFixed(2)
-          : "N/A") +
-        "%, Boss."
-      );
-    } catch {
-      return (
-        "Crypto price service is unavailable right now, Boss."
-      );
-    }
-  }
-
-  /* =========================================================
-     21. OPEN APPS
-     ========================================================= */
-
-  function openApp(text) {
-    const t = normalizeText(text);
-
-    const apps = [
-      {
-        names: ["whatsapp", "what app", "whats app"],
-        url: "https://wa.me/"
-      },
-      {
-        names: ["telegram"],
-        url: "https://t.me/"
-      },
-      {
-        names: ["instagram", "insta"],
-        url: "https://www.instagram.com/"
-      },
-      {
-        names: ["facebook", "fb"],
-        url: "https://www.facebook.com/"
-      },
-      {
-        names: ["gmail", "mail"],
-        url: "https://mail.google.com/"
-      },
-      {
-        names: ["youtube", "you tube"],
-        url: "https://www.youtube.com/"
-      },
-      {
-        names: ["google"],
-        url: "https://www.google.com/"
-      }
-    ];
-
-    for (const app of apps) {
-      if (
-        app.names.some((name) =>
-          t.includes(name)
-        )
-      ) {
-        window.open(
-          app.url,
-          "_blank",
-          "noopener,noreferrer"
-        );
+        if (!price) {
+            throw new Error();
+        }
 
         return (
-          "Opening " +
-          app.names[0] +
-          ", Boss."
+            `${coin} price is approximately ` +
+            `$${price.usd} or ₹${price.inr}, Boss.`
         );
-      }
+
+    } catch {
+
+        return "Crypto data is unavailable right now, Boss.";
+    }
+}
+
+
+/* =========================
+   NEWS
+   ========================= */
+
+async function getNews() {
+
+    /*
+       No API key is required here.
+       Google News search is opened directly.
+    */
+
+    window.open(
+        "https://news.google.com/",
+        "_blank"
+    );
+
+    return "Opening the latest news, Boss.";
+}
+
+
+/* =========================
+   OPEN APPS
+   ========================= */
+
+function openApp(text) {
+
+    const t =
+        normalize(text);
+
+    let url = null;
+    let name = "";
+
+    if (t.includes("youtube")) {
+
+        url =
+            "https://www.youtube.com/";
+        name = "YouTube";
+
+    } else if (
+        t.includes("whatsapp")
+    ) {
+
+        url =
+            "https://wa.me/";
+        name = "WhatsApp";
+
+    } else if (
+        t.includes("google")
+    ) {
+
+        url =
+            "https://www.google.com/";
+        name = "Google";
+
+    } else if (
+        t.includes("gmail") ||
+        t.includes("mail")
+    ) {
+
+        url =
+            "https://mail.google.com/";
+        name = "Gmail";
+
+    } else if (
+        t.includes("maps")
+    ) {
+
+        url =
+            "https://maps.google.com/";
+        name = "Google Maps";
+
+    } else if (
+        t.includes("instagram")
+    ) {
+
+        url =
+            "https://www.instagram.com/";
+        name = "Instagram";
+
+    } else {
+
+        return "I don't know which app you want to open, Boss.";
+    }
+
+    window.open(
+        url,
+        "_blank"
+    );
+
+    return `Opening ${name}, Boss.`;
+}
+
+
+/* =========================
+   IMAGE PREVIEW
+   ========================= */
+
+function previewImage(file) {
+
+    if (!file) return;
+
+    if (
+        !file.type.startsWith("image/")
+    ) {
+        respond(
+            "Please select an image file, Boss.",
+            false
+        );
+        return;
+    }
+
+    const oldPreview =
+        document.getElementById(
+            "jarvis-image-preview"
+        );
+
+    if (oldPreview) {
+        oldPreview.remove();
+    }
+
+    const wrapper =
+        document.createElement("div");
+
+    wrapper.id =
+        "jarvis-image-preview";
+
+    wrapper.style.margin =
+        "10px 0";
+
+    const image =
+        document.createElement("img");
+
+    image.style.maxWidth =
+        "100%";
+
+    image.style.maxHeight =
+        "300px";
+
+    image.style.borderRadius =
+        "10px";
+
+    image.style.objectFit =
+        "contain";
+
+    image.alt =
+        "Uploaded image preview";
+
+    image.src =
+        URL.createObjectURL(file);
+
+    wrapper.appendChild(image);
+
+    if (chat) {
+        chat.appendChild(wrapper);
+        chat.scrollTop =
+            chat.scrollHeight;
     }
 
     return (
-      "I cannot safely open that app from this browser, Boss."
+        "Image uploaded successfully, Boss."
     );
-  }
+}
 
-  /* =========================================================
-     22. CAMERA
-     ========================================================= */
 
-  function openCamera() {
-    if (!imgInput) {
-      return "Camera input is not available, Boss.";
+/* =========================
+   CAMERA
+   ========================= */
+
+function openCamera() {
+
+    /*
+       Your HTML already has img-input.
+       The existing input doesn't have capture,
+       so create a temporary camera input.
+    */
+
+    const cameraInput =
+        document.createElement("input");
+
+    cameraInput.type =
+        "file";
+
+    cameraInput.accept =
+        "image/*";
+
+    cameraInput.capture =
+        "environment";
+
+    cameraInput.style.display =
+        "none";
+
+    document.body.appendChild(
+        cameraInput
+    );
+
+    cameraInput.addEventListener(
+        "change",
+        () => {
+
+            const file =
+                cameraInput.files?.[0];
+
+            if (file) {
+
+                previewImage(file);
+
+                addMessage(
+                    "Camera image received, Boss.",
+                    "jarvis"
+                );
+            }
+
+            cameraInput.remove();
+        },
+        { once: true }
+    );
+
+    cameraInput.click();
+}
+
+
+/* =========================
+   IMAGE BUTTON
+   ========================= */
+
+if (camBtn) {
+
+    camBtn.addEventListener(
+        "click",
+        () => {
+
+            openCamera();
+        }
+    );
+}
+
+
+/* =========================
+   IMAGE INPUT
+   ========================= */
+
+if (imgInput) {
+
+    imgInput.addEventListener(
+        "change",
+        () => {
+
+            const file =
+                imgInput.files?.[0];
+
+            if (!file) return;
+
+            previewImage(file);
+        }
+    );
+}
+
+
+/* =========================
+   MAIN TOOL HANDLER
+   ========================= */
+
+async function handleTools(text) {
+
+    const original =
+        String(text || "")
+            .trim();
+
+    if (!original) {
+        return "Please give me a command, Boss.";
     }
 
     /*
-      capture=environment asks supported mobile browsers
-      to use the rear camera.
+       Smart correction happens before matching.
     */
 
-    imgInput.setAttribute(
-      "capture",
-      "environment"
+    const t =
+        smartCorrect(original);
+
+
+    /* =====================
+       TIME
+       ===================== */
+
+    if (
+        /\btime\b/.test(t) ||
+        t.includes("what time")
+    ) {
+        return getTime();
+    }
+
+
+    /* =====================
+       WEATHER
+       ===================== */
+
+    if (
+        t.includes("weather") ||
+        t.includes("temperature")
+    ) {
+        return await getWeather();
+    }
+
+
+    /* =====================
+       TIMER
+       ===================== */
+
+    if (
+        t.includes("timer") &&
+        /\d/.test(t)
+    ) {
+        return createTimer(t);
+    }
+
+
+    /* =====================
+       DICE
+       ===================== */
+
+    if (
+        t.includes("dice") ||
+        t.includes("roll dice")
+    ) {
+        return rollDice();
+    }
+
+
+    /* =====================
+       COIN
+       ===================== */
+
+    if (
+        t.includes("coin") &&
+        (
+            t.includes("toss") ||
+            t.includes("flip") ||
+            t.includes("throw")
+        )
+    ) {
+        return tossCoin();
+    }
+
+
+    /* =====================
+       JOKE
+       ===================== */
+
+    if (
+        t.includes("joke")
+    ) {
+        return await getJoke();
+    }
+
+
+    /* =====================
+       QUOTE
+       ===================== */
+
+    if (
+        t.includes("quote")
+    ) {
+        return await getQuote();
+    }
+
+
+    /* =====================
+       NEWS
+       ===================== */
+
+    if (
+        t.includes("news") ||
+        t.includes("latest news")
+    ) {
+        return await getNews();
+    }
+
+
+    /* =====================
+       TRANSLATE
+       ===================== */
+
+    if (
+        t.startsWith("translate ")
+    ) {
+        return await translateText(
+            t
+        );
+    }
+
+
+    /* =====================
+       CURRENCY
+       ===================== */
+
+    if (
+        t.includes("currency") ||
+        /\b[a-z]{3}\s+to\s+[a-z]{3}\b/i.test(t)
+    ) {
+        return await currencyConvert(
+            t
+        );
+    }
+
+
+    /* =====================
+       DICTIONARY
+       ===================== */
+
+    if (
+        t.startsWith("define ") ||
+        t.startsWith("dictionary ")
+    ) {
+
+        const word =
+            t
+                .replace(
+                    /^define\s*/i,
+                    ""
+                )
+                .replace(
+                    /^dictionary\s*/i,
+                    ""
+                )
+                .trim();
+
+        return await dictionary(
+            word
+        );
+    }
+
+
+    /* =====================
+       PASSWORD
+       ===================== */
+
+    if (
+        t.includes("password") &&
+        (
+            t.includes("generate") ||
+            t.includes("create") ||
+            t.includes("make")
+        )
+    ) {
+
+        const match =
+            t.match(/\b(\d{1,2})\b/);
+
+        const length =
+            match
+                ? Number(match[1])
+                : 16;
+
+        return generatePassword(
+            length
+        );
+    }
+
+
+    /* =====================
+       CRYPTO
+       ===================== */
+
+    if (
+        t.includes("crypto") ||
+        t.includes("bitcoin") ||
+        t.includes("ethereum") ||
+        t.includes("dogecoin") ||
+        t.includes("solana")
+    ) {
+        return await cryptoInfo(
+            t
+        );
+    }
+
+
+    /* =====================
+       YOUTUBE PLAY
+       ===================== */
+
+    if (
+        t.includes("youtube") ||
+        t.startsWith("play ")
+    ) {
+
+        return youtubeSearch(
+            original
+        );
+    }
+
+
+    /* =====================
+       OPEN APP
+       ===================== */
+
+    if (
+        t.startsWith("open ")
+    ) {
+
+        return openApp(
+            t
+        );
+    }
+
+
+    /* =====================
+       SEARCH
+       ===================== */
+
+    if (
+        t.startsWith("search ") ||
+        t.startsWith("google ")
+    ) {
+
+        const query =
+            t
+                .replace(
+                    /^(search|google)\s*/i,
+                    ""
+                )
+                .trim();
+
+        return webSearch(
+            query
+        );
+    }
+
+
+    /* =====================
+       CLEAR MEMORY
+       ===================== */
+
+    if (
+        (
+            t.includes("clear") ||
+            t.includes("delete")
+        ) &&
+        t.includes("memory")
+    ) {
+
+        clearMemory();
+
+        return null;
+    }
+
+
+    /* =====================
+       LOCAL CHAT
+       ===================== */
+
+    const chatReply =
+        localChat(
+            original
+        );
+
+    if (chatReply) {
+        return chatReply;
+    }
+
+
+    return null;
+}
+
+
+/* =========================
+   EXECUTE COMMAND
+   ========================= */
+
+async function executeCommand(
+    command,
+    voiceMode = false
+) {
+
+    const clean =
+        String(command || "")
+            .trim();
+
+    if (!clean) return;
+
+    /*
+       User message first.
+    */
+
+    addMessage(
+        clean,
+        "user"
     );
 
-    imgInput.value = "";
+    remember(
+        "user",
+        clean
+    );
 
-    imgInput.click();
 
-    return "Camera activated. Please capture an image, Boss.";
-  }
+    /*
+       Stop previous voice so the
+       new answer can start quickly.
+    */
 
-  /* =========================================================
-     23. IMAGE UPLOAD / PREVIEW
-     ========================================================= */
-
-  function handleImage(file) {
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      reply(
-        "Please select a valid image file, Boss.",
-        true
-      );
-      return;
+    if (voiceMode) {
+        stopSpeaking();
     }
 
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      addImageMessage(
-        reader.result,
-        file.name || "Uploaded image"
-      );
-
-      remember(
-        "image",
-        file.name || "Uploaded image"
-      );
-
-      reply(
-        "Image uploaded and previewed successfully, Boss.",
-        false
-      );
-    };
-
-    reader.onerror = () => {
-      reply(
-        "I could not read that image, Boss.",
-        true
-      );
-    };
-
-    reader.readAsDataURL(file);
-  }
-
-  /* =========================================================
-     24. IMAGE BUTTON
-     ========================================================= */
-
-  if (camBtn) {
-    camBtn.addEventListener("click", () => {
-      openCamera();
-    });
-  }
-
-  if (imgInput) {
-    imgInput.addEventListener("change", () => {
-      const file =
-        imgInput.files &&
-        imgInput.files[0];
-
-      if (file) {
-        handleImage(file);
-      }
-    });
-  }
-
-  /* =========================================================
-     25. SIMPLE CHAT ENGINE
-     ========================================================= */
-
-  function localChat(text) {
-    const t = normalizeText(text);
-
-    if (
-      /^(hi|hello|hey|hai|namaste)\b/i.test(t)
-    ) {
-      return "Hello, Boss. J.A.R.V.I.S. is online.";
-    }
-
-    if (
-      t.includes("who are you") ||
-      t.includes("what are you")
-    ) {
-      return (
-        "I am J.A.R.V.I.S., your browser-based personal assistant, Boss."
-      );
-    }
-
-    if (
-      t.includes("thank") ||
-      t.includes("thanks")
-    ) {
-      return "You're welcome, Boss.";
-    }
-
-    if (
-      t.includes("good morning")
-    ) {
-      return "Good morning, Boss.";
-    }
-
-    if (
-      t.includes("good night")
-    ) {
-      return "Good night, Boss.";
-    }
-
-    if (
-      t.includes("how are you")
-    ) {
-      return "All systems are operational, Boss.";
-    }
-
-    if (
-      t.includes("what can you do") ||
-      t.includes("features")
-    ) {
-      return (
-        "I can handle time, weather, timers, dice, coin tosses, jokes, quotes, news, translation, currency, dictionary, passwords, search, YouTube, crypto, voice commands, camera and image upload."
-      );
-    }
-
-    return null;
-  }
-
-  /* =========================================================
-     26. TOOL HANDLER
-     ========================================================= */
-
-  async function handleTools(text) {
-    const original = String(text || "");
-    const t = cleanCommand(original);
-
-    if (!t) return null;
-
-    const command =
-      detectCorrectedCommand(t);
-
-    /* ---------------- TIME ---------------- */
-
-    if (
-      command === "time" ||
-      /\bwhat(?:'s| is)?\s+the\s+time\b/i.test(t)
-    ) {
-      return getTime();
-    }
-
-    /* ---------------- WEATHER ---------------- */
-
-    if (
-      command === "weather"
-    ) {
-      return await getWeather();
-    }
-
-    /* ---------------- TIMER ---------------- */
-
-    if (
-      command === "timer" ||
-      /\bset\b.*\btimer\b/i.test(t)
-    ) {
-      return startTimer(t);
-    }
-
-    /* ---------------- DICE ---------------- */
-
-    if (
-      command === "dice" ||
-      /\broll\b.*\bdice\b/i.test(t)
-    ) {
-      return rollDice(t);
-    }
-
-    /* ---------------- COIN ---------------- */
-
-    if (
-      command === "coin" ||
-      /\b(heads|tails)\b/i.test(t) ||
-      /\btoss\b.*\bcoin\b/i.test(t)
-    ) {
-      return tossCoin();
-    }
-
-    /* ---------------- JOKE ---------------- */
-
-    if (
-      command === "joke"
-    ) {
-      return await getJoke();
-    }
-
-    /* ---------------- QUOTE ---------------- */
-
-    if (
-      command === "quote"
-    ) {
-      return await getQuote();
-    }
-
-    /* ---------------- NEWS ---------------- */
-
-    if (
-      command === "news"
-    ) {
-      return newsSearch(t);
-    }
-
-    /* ---------------- TRANSLATE ---------------- */
-
-    if (
-      command === "translate"
-    ) {
-      return await translateText(t);
-    }
-
-    /* ---------------- CURRENCY ---------------- */
-
-    if (
-      command === "currency"
-    ) {
-      return await currencyConvert(t);
-    }
-
-    /* ---------------- DICTIONARY ---------------- */
-
-    if (
-      command === "dictionary"
-    ) {
-      return await dictionary(t);
-    }
-
-    /* ---------------- PASSWORD ---------------- */
-
-    if (
-      command === "password"
-    ) {
-      return generatePassword(t);
-    }
-
-    /* ---------------- YOUTUBE ---------------- */
-
-    if (
-      command === "youtube" ||
-      /\bplay\b/i.test(t) &&
-      (
-        t.includes("song") ||
-        t.includes("music") ||
-        t.includes("youtube")
-      )
-    ) {
-      return youtubePlay(t);
-    }
-
-    /* ---------------- CRYPTO ---------------- */
-
-    if (
-      command === "crypto"
-    ) {
-      return await cryptoInfo(t);
-    }
-
-    /* ---------------- CAMERA ---------------- */
-
-    if (
-      command === "camera"
-    ) {
-      return openCamera();
-    }
-
-    /* ---------------- CLEAR MEMORY ---------------- */
-
-    if (
-      command === "clear" ||
-      /\b(clear|delete|erase|forget)\b.*\bmemory\b/i.test(t)
-    ) {
-      clearMemory();
-      return null;
-    }
-
-    /* ---------------- OPEN APP ---------------- */
-
-    if (
-      /\b(open|launch|start)\b/i.test(t)
-    ) {
-      return openApp(t);
-    }
-
-    /* ---------------- SEARCH ---------------- */
-
-    if (
-      command === "search" ||
-      /\bsearch\b/i.test(t)
-    ) {
-      return webSearch(t);
-    }
-
-    return null;
-  }
-
-  /* =========================================================
-     27. EXECUTE COMMAND
-     ========================================================= */
-
-  let executing = false;
-
-  async function executeCommand(commandText) {
-    if (executing) return;
-
-    const raw = String(commandText || "").trim();
-
-    if (!raw) return;
-
-    executing = true;
 
     try {
-      addMessage(raw, "user");
 
-      remember("user", raw);
+        const result =
+            await handleTools(
+                clean
+            );
 
-      const cleaned = cleanCommand(raw);
-
-      /*
-        First try actual tools.
-      */
-
-      let result =
-        await handleTools(cleaned);
-
-      /*
-        If no tool matched, use local chat.
-      */
-
-      if (result === null) {
-        const local =
-          localChat(cleaned);
-
-        if (local) {
-          result = local;
+        /*
+           Some tools directly update UI.
+        */
+        if (result === null) {
+            return;
         }
-      }
 
-      /*
-        Final browser search fallback.
-      */
-
-      if (result === null) {
-        result =
-          "I understood your command, Boss, but I do not have a built-in tool for that request yet. Try 'search " +
-          cleaned +
-          "'.";
-      }
-
-      /*
-        handleTools may already have displayed
-        the memory-clear response.
-      */
-
-      if (result !== null) {
-        reply(result, false);
-      }
-    } catch (error) {
-      console.error(
-        "JARVIS command error:",
-        error
-      );
-
-      reply(
-        "Something went wrong while executing that command, Boss.",
-        true
-      );
-    } finally {
-      executing = false;
-    }
-  }
-
-  /* =========================================================
-     28. EXECUTE BUTTON
-     ========================================================= */
-
-  if (send) {
-    send.addEventListener("click", () => {
-      if (!msg) return;
-
-      const command = msg.value.trim();
-
-      if (!command) {
-        reply(
-          "Please enter a command, Boss.",
-          true
+        /*
+           Fast response.
+        */
+        respond(
+            result,
+            voiceMode
         );
-        return;
-      }
 
-      msg.value = "";
+    } catch (error) {
 
-      executeCommand(command);
-    });
-  }
+        console.error(
+            "JARVIS error:",
+            error
+        );
 
-  /* =========================================================
-     29. ENTER KEY
-     ========================================================= */
+        respond(
+            "Something went wrong while processing that command, Boss.",
+            voiceMode
+        );
+    }
+}
 
-  if (msg) {
-    msg.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
 
-        if (send) {
-          send.click();
-        } else {
-          executeCommand(msg.value);
-          msg.value = "";
+/* =========================
+   SEND BUTTON
+   ========================= */
+
+if (send) {
+
+    send.addEventListener(
+        "click",
+        () => {
+
+            const command =
+                msg?.value?.trim();
+
+            if (!command) return;
+
+            msg.value = "";
+
+            /*
+               Typed commands don't speak.
+               This makes normal text interaction faster.
+            */
+
+            executeCommand(
+                command,
+                false
+            );
         }
-      }
-    });
-  }
+    );
+}
 
-  /* =========================================================
-     30. CLEAR MEMORY BUTTON
-     ========================================================= */
 
-  if (clearBtn) {
-    clearBtn.addEventListener("click", () => {
-      clearMemory();
-    });
-  }
+/* =========================
+   ENTER KEY
+   ========================= */
 
-  /* =========================================================
-     31. SPEECH RECOGNITION
-     ========================================================= */
+if (msg) {
 
-  const SpeechRecognition =
+    msg.addEventListener(
+        "keydown",
+        event => {
+
+            if (
+                event.key === "Enter"
+            ) {
+
+                event.preventDefault();
+
+                const command =
+                    msg.value.trim();
+
+                if (!command) return;
+
+                msg.value = "";
+
+                executeCommand(
+                    command,
+                    false
+                );
+            }
+        }
+    );
+}
+
+
+/* =========================
+   SPEECH RECOGNITION
+   ========================= */
+
+const SpeechRecognition =
     window.SpeechRecognition ||
     window.webkitSpeechRecognition;
 
-  let recognition = null;
-  let listening = false;
+let recognition = null;
+let listening = false;
 
-  if (SpeechRecognition) {
+if (SpeechRecognition) {
+
     recognition =
-      new SpeechRecognition();
-
-    recognition.continuous = false;
-    recognition.interimResults = true;
+        new SpeechRecognition();
 
     /*
-      English + Indian English.
-      Browser chooses the available speech model.
+       Faster recognition.
     */
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.lang =
+        CONFIG.voiceLang;
 
-    recognition.lang = "en-IN";
 
     recognition.onstart = () => {
-      listening = true;
 
-      if (micBtn) {
-        micBtn.setAttribute(
-          "aria-label",
-          "Stop voice input"
-        );
+        listening = true;
 
-        micBtn.dataset.listening = "true";
-      }
+        if (micBtn) {
 
-      addMessage(
-        "Listening...",
-        "jarvis"
-      );
-    };
+            micBtn.dataset.listening =
+                "true";
 
-    recognition.onresult = (event) => {
-      let finalText = "";
-      let interimText = "";
-
-      for (
-        let i = event.resultIndex;
-        i < event.results.length;
-        i++
-      ) {
-        const transcript =
-          event.results[i][0].transcript;
-
-        if (event.results[i].isFinal) {
-          finalText += transcript;
-        } else {
-          interimText += transcript;
+            micBtn.setAttribute(
+                "aria-label",
+                "Stop voice input"
+            );
         }
-      }
-
-      const spoken =
-        (finalText || interimText).trim();
-
-      if (spoken && msg) {
-        msg.value = spoken;
-      }
-
-      /*
-        Execute only when browser reports final result.
-      */
-
-      if (finalText.trim()) {
-        const command =
-          finalText.trim();
 
         if (msg) {
-          msg.value = "";
+            msg.placeholder =
+                "Listening...";
         }
-
-        executeCommand(command);
-      }
     };
 
-    recognition.onerror = (event) => {
-      console.warn(
-        "Speech recognition error:",
-        event.error
-      );
 
-      if (
-        event.error === "not-allowed" ||
-        event.error === "service-not-allowed"
-      ) {
-        reply(
-          "Microphone permission was denied, Boss.",
-          true
-        );
-      } else if (
-        event.error === "no-speech"
-      ) {
-        reply(
-          "I did not hear anything, Boss.",
-          false
-        );
-      } else {
-        reply(
-          "Voice recognition encountered an error, Boss.",
-          false
-        );
-      }
-    };
+    recognition.onresult =
+        event => {
+
+            const result =
+                event.results?.[0]?.[0];
+
+            if (!result) return;
+
+            const spoken =
+                result.transcript
+                    .trim();
+
+            if (!spoken) return;
+
+            /*
+               Put recognized speech into
+               input briefly.
+            */
+
+            if (msg) {
+                msg.value =
+                    spoken;
+            }
+
+            /*
+               Execute immediately.
+            */
+
+            executeCommand(
+                spoken,
+                true
+            );
+
+            if (msg) {
+                msg.value = "";
+            }
+        };
+
+
+    recognition.onerror =
+        event => {
+
+            console.warn(
+                "Speech error:",
+                event.error
+            );
+
+            listening = false;
+
+            if (
+                event.error ===
+                "not-allowed"
+            ) {
+
+                respond(
+                    "Microphone permission is required, Boss.",
+                    true
+                );
+            }
+        };
+
 
     recognition.onend = () => {
-      listening = false;
 
-      if (micBtn) {
-        micBtn.setAttribute(
-          "aria-label",
-          "Activate voice input"
-        );
+        listening = false;
 
-        micBtn.dataset.listening = "false";
-      }
-    };
-  }
+        if (micBtn) {
 
-  /* =========================================================
-     32. MIC BUTTON
-     ========================================================= */
+            micBtn.dataset.listening =
+                "false";
 
-  if (micBtn) {
-    micBtn.addEventListener("click", () => {
-      if (!recognition) {
-        reply(
-          "Voice recognition is not supported by this browser. Please use Chrome or a compatible browser.",
-          true
-        );
-        return;
-      }
-
-      try {
-        if (listening) {
-          recognition.stop();
-          return;
+            micBtn.setAttribute(
+                "aria-label",
+                "Activate voice input"
+            );
         }
 
-        recognition.start();
-      } catch (error) {
-        /*
-          Calling start twice can throw an InvalidStateError.
-          Stop first and retry once.
-        */
+        if (msg) {
+            msg.placeholder =
+                "Enter a command for J.A.R.V.I.S...";
+        }
+    };
+}
 
-        try {
-          recognition.stop();
-        } catch {}
 
-        setTimeout(() => {
-          try {
-            recognition.start();
-          } catch {
-            reply(
-              "I could not start the microphone, Boss.",
-              true
-            );
-          }
-        }, 200);
-      }
-    });
-  }
+/* =========================
+   MIC BUTTON
+   ========================= */
 
-  /* =========================================================
-     33. OPTIONAL VOICE LANGUAGE SUPPORT
-     ========================================================= */
+if (micBtn) {
 
-  function setRecognitionLanguage(language) {
-    if (!recognition) return;
+    micBtn.addEventListener(
+        "click",
+        () => {
 
-    recognition.lang = language;
-  }
+            /*
+               If JARVIS is speaking,
+               stop immediately.
+            */
 
-  /*
-    Default Indian English.
+            if (speaking) {
+                stopSpeaking();
+            }
 
-    The function is exposed so it can be changed from
-    browser console if needed:
+            if (!recognition) {
 
-    setRecognitionLanguage("te-IN")
-  */
+                respond(
+                    "Voice recognition is not supported in this browser, Boss.",
+                    true
+                );
 
-  window.JARVIS_SET_VOICE_LANGUAGE =
-    setRecognitionLanguage;
+                return;
+            }
 
-  /* =========================================================
-     34. IMAGE PREVIEW DRAG/DROP SUPPORT
-     ========================================================= */
 
-  if (chat) {
-    chat.addEventListener("dragover", (event) => {
-      event.preventDefault();
-    });
+            if (listening) {
 
-    chat.addEventListener("drop", (event) => {
-      event.preventDefault();
+                try {
+                    recognition.stop();
+                } catch {}
 
-      const files =
-        event.dataTransfer &&
-        event.dataTransfer.files;
+                return;
+            }
 
-      if (!files || !files.length) return;
 
-      const file = files[0];
+            try {
 
-      handleImage(file);
-    });
-  }
+                recognition.start();
 
-  /* =========================================================
-     35. PAGE LOAD STATUS
-     ========================================================= */
+            } catch {
 
-  function initializeJarvis() {
-    console.log(
-      "J.A.R.V.I.S. initialized successfully."
+                /*
+                   Browser may still be closing
+                   previous recognition session.
+                */
+
+                try {
+                    recognition.stop();
+                } catch {}
+
+                setTimeout(() => {
+
+                    try {
+                        recognition.start();
+                    } catch {
+                        respond(
+                            "I could not start the microphone, Boss.",
+                            true
+                        );
+                    }
+
+                }, 80);
+            }
+        }
     );
+}
 
-    console.log(
-      "Available commands:",
-      Object.keys(commandAliases).join(", ")
+
+/* =========================
+   CLEAR BUTTON
+   ========================= */
+
+if (clearBtn) {
+
+    clearBtn.addEventListener(
+        "click",
+        () => {
+
+            stopSpeaking();
+
+            clearMemory();
+        }
     );
+}
 
-    /*
-      Do not automatically speak on page load.
-      This avoids browser autoplay restrictions.
-    */
 
-    if (chat && chat.children.length === 0) {
-      addMessage(
-        "J.A.R.V.I.S. online. System ready, Boss.",
-        "jarvis"
-      );
-    }
-  }
+/* =========================
+   GLOBAL HELPERS
+   ========================= */
 
-  /* =========================================================
-     36. PUBLIC API
-     ========================================================= */
+window.JARVIS = {
 
-  window.JARVIS = {
-    execute: executeCommand,
     speak,
+    stopSpeaking,
+    executeCommand,
     clearMemory,
-    getTime,
     getWeather,
-    rollDice,
-    tossCoin,
-    getJoke,
-    getQuote,
-    translateText,
-    currencyConvert,
-    dictionary,
-    generatePassword,
-    webSearch,
-    youtubePlay,
-    cryptoInfo,
-    openCamera
-  };
+    generatePassword
+};
 
-  /* =========================================================
-     37. START
-     ========================================================= */
 
-  if (
-    document.readyState === "loading"
-  ) {
-    document.addEventListener(
-      "DOMContentLoaded",
-      initializeJarvis,
-      { once: true }
-    );
-  } else {
-    initializeJarvis();
-  }
+/* =========================
+   READY MESSAGE
+   ========================= */
 
-})();
+console.log(
+    "J.A.R.V.I.S. ONLINE — FAST VOICE MODE READY"
+);
