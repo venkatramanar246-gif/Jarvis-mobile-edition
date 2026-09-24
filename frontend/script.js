@@ -1,25 +1,21 @@
 /* =========================================================
-   J.A.R.V.I.S - COMPLETE WORKING SCRIPT
+   J.A.R.V.I.S COMPLETE SCRIPT
    PART 1
    ========================================================= */
 
 "use strict";
 
-/* =========================================================
-   CONFIG
-   ========================================================= */
+/* ================= CONFIG ================= */
 
-const JARVIS_CONFIG = {
+const CONFIG = {
     TIME_ZONE: "Asia/Kolkata",
 
-    // Live time APIs - first one is tried first
     TIME_APIS: [
         "https://timeapi.io/api/Time/current/zone?timeZone=Asia/Kolkata",
         "https://utctime.app/api/now/Asia/Kolkata"
     ],
 
-    WEATHER_API:
-        "https://api.open-meteo.com/v1/forecast",
+    WEATHER_API: "https://api.open-meteo.com/v1/forecast",
 
     DICTIONARY_API:
         "https://api.dictionaryapi.dev/api/v2/entries/en/",
@@ -45,58 +41,42 @@ const JARVIS_CONFIG = {
             "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en"
         ),
 
-    STORAGE_KEY: "jarvis_memory_v2"
+    MEMORY_KEY: "jarvis_memory_v3"
 };
 
 
-/* =========================================================
-   DOM ELEMENTS
-   ========================================================= */
+/* ================= DOM ================= */
 
-const chat =
-    document.getElementById("chat");
-
-const msg =
-    document.getElementById("msg");
-
-const sendBtn =
-    document.getElementById("send");
-
-const micBtn =
-    document.getElementById("mic-btn");
-
-const camBtn =
-    document.getElementById("cam-btn");
-
-const clearBtn =
-    document.getElementById("clear-btn");
-
-const imgInput =
-    document.getElementById("img-input");
+const chat = document.getElementById("chat");
+const msg = document.getElementById("msg");
+const sendBtn = document.getElementById("send");
+const micBtn = document.getElementById("mic-btn");
+const camBtn = document.getElementById("cam-btn");
+const clearBtn = document.getElementById("clear-btn");
+const imgInput = document.getElementById("img-input");
 
 
-/* =========================================================
-   STATE
-   ========================================================= */
+/* ================= STATE ================= */
 
 let liveTimeOffset = 0;
 let liveTimeSynced = false;
-let timeSyncPromise = null;
+let timeSyncRunning = false;
 
 let recognition = null;
-let isListening = false;
+let listening = false;
 
-let currentTimer = null;
+let timerID = null;
+let busy = false;
 
 let weatherCache = null;
 let weatherCacheTime = 0;
 
 
 /* =========================================================
-   BASIC HELPERS
+   GENERAL HELPERS
    ========================================================= */
 
-function normalizeText(text) {
+function normalize(text) {
     return String(text || "")
         .trim()
         .toLowerCase()
@@ -111,18 +91,14 @@ function escapeHTML(text) {
 }
 
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-
 async function fetchJSON(url, options = {}, timeout = 10000) {
 
     const controller = new AbortController();
 
-    const timer = setTimeout(() => {
-        controller.abort();
-    }, timeout);
+    const timeoutID = setTimeout(
+        () => controller.abort(),
+        timeout
+    );
 
     try {
 
@@ -133,23 +109,25 @@ async function fetchJSON(url, options = {}, timeout = 10000) {
         });
 
         if (!response.ok) {
-            throw new Error("HTTP " + response.status);
+            throw new Error(
+                "HTTP " + response.status
+            );
         }
 
         return await response.json();
 
     } finally {
 
-        clearTimeout(timer);
+        clearTimeout(timeoutID);
     }
 }
 
 
 /* =========================================================
-   CHAT OUTPUT
+   CHAT
    ========================================================= */
 
-function addMessage(text, type = "jarvis") {
+function addMessage(text, type) {
 
     if (!chat) return;
 
@@ -160,8 +138,9 @@ function addMessage(text, type = "jarvis") {
             ? "user-message"
             : "jarvis-message";
 
-    div.innerHTML = escapeHTML(text)
-        .replace(/\n/g, "<br>");
+    div.innerHTML =
+        escapeHTML(text)
+            .replace(/\n/g, "<br>");
 
     chat.appendChild(div);
 
@@ -179,27 +158,20 @@ function jarvisMessage(text) {
 }
 
 
-function reply(text, speakIt = true) {
+function reply(text, speakNow = true) {
 
-    const clean = String(text || "")
-        .trim();
+    if (!text) return;
 
-    if (!clean) return "";
+    jarvisMessage(text);
 
-    // IMPORTANT:
-    // Always display response in chat box
-    jarvisMessage(clean);
-
-    if (speakIt) {
-        speak(clean);
+    if (speakNow) {
+        speak(text);
     }
-
-    return clean;
 }
 
 
 /* =========================================================
-   TEXT TO SPEECH
+   VOICE OUTPUT
    ========================================================= */
 
 function speak(text) {
@@ -210,94 +182,75 @@ function speak(text) {
 
     try {
 
-        window.speechSynthesis.cancel();
+        speechSynthesis.cancel();
 
-        const utterance =
+        const voice =
             new SpeechSynthesisUtterance(
                 String(text)
             );
 
-        utterance.lang = "en-IN";
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
+        voice.lang = "en-IN";
+        voice.rate = 1;
+        voice.pitch = 1;
+        voice.volume = 1;
 
-        window.speechSynthesis.speak(
-            utterance
-        );
+        speechSynthesis.speak(voice);
 
     } catch (error) {
-        console.warn("Speech error:", error);
+
+        console.warn(
+            "Speech error:",
+            error
+        );
     }
 }
 
 
 /* =========================================================
-   LIVE INTERNET TIME
+   LIVE TIME
    ========================================================= */
 
-function parseTimeAPI(data) {
+function parseServerTime(data) {
 
     if (!data) return null;
 
-    let dateValue = null;
+    const candidates = [
+        data.dateTime,
+        data.datetime,
+        data.currentDateTime,
+        data.utcDateTime,
+        data.utc_datetime,
+        data.timestamp
+    ];
 
-    // timeapi.io
-    if (data.dateTime) {
-        dateValue = new Date(data.dateTime);
-    }
+    for (const value of candidates) {
 
-    // utcTime / datetime / dateTime variants
-    if (
-        !dateValue ||
-        Number.isNaN(dateValue.getTime())
-    ) {
+        if (!value) continue;
 
-        const candidates = [
-            data.utc_datetime,
-            data.utcDateTime,
-            data.datetime,
-            data.dateTime,
-            data.currentDateTime,
-            data.timestamp
-        ];
+        const date = new Date(value);
 
-        for (const value of candidates) {
-
-            if (!value) continue;
-
-            const d = new Date(value);
-
-            if (!Number.isNaN(d.getTime())) {
-                dateValue = d;
-                break;
-            }
+        if (!Number.isNaN(date.getTime())) {
+            return date;
         }
     }
 
-    if (
-        !dateValue ||
-        Number.isNaN(dateValue.getTime())
-    ) {
-        return null;
-    }
-
-    return dateValue;
+    return null;
 }
 
 
 async function syncLiveTime() {
 
-    if (timeSyncPromise) {
-        return timeSyncPromise;
+    if (timeSyncRunning) {
+        return liveTimeSynced;
     }
 
-    timeSyncPromise = (async () => {
+    timeSyncRunning = true;
 
-        const requestStart =
-            Date.now();
+    const requestStart = Date.now();
 
-        for (const api of JARVIS_CONFIG.TIME_APIS) {
+    try {
+
+        for (const api of CONFIG.TIME_APIS) {
 
             try {
 
@@ -309,7 +262,7 @@ async function syncLiveTime() {
                     );
 
                 const serverDate =
-                    parseTimeAPI(data);
+                    parseServerTime(data);
 
                 if (!serverDate) {
                     continue;
@@ -334,21 +287,18 @@ async function syncLiveTime() {
 
                 console.warn(
                     "Time API failed:",
-                    api,
-                    error
+                    api
                 );
             }
         }
 
         liveTimeSynced = false;
+
         return false;
 
-    })();
-
-    try {
-        return await timeSyncPromise;
     } finally {
-        timeSyncPromise = null;
+
+        timeSyncRunning = false;
     }
 }
 
@@ -361,41 +311,33 @@ function getLiveDate() {
 }
 
 
-function formatLiveTime() {
-
-    const date =
-        getLiveDate();
+function getLiveTimeString() {
 
     return new Intl.DateTimeFormat(
         "en-IN",
         {
-            timeZone:
-                JARVIS_CONFIG.TIME_ZONE,
+            timeZone: CONFIG.TIME_ZONE,
             hour: "2-digit",
             minute: "2-digit",
             second: "2-digit",
             hour12: true
         }
-    ).format(date);
+    ).format(getLiveDate());
 }
 
 
-function formatLiveDate() {
-
-    const date =
-        getLiveDate();
+function getLiveDateString() {
 
     return new Intl.DateTimeFormat(
         "en-IN",
         {
-            timeZone:
-                JARVIS_CONFIG.TIME_ZONE,
+            timeZone: CONFIG.TIME_ZONE,
             weekday: "long",
             day: "2-digit",
             month: "long",
             year: "numeric"
         }
-    ).format(date);
+    ).format(getLiveDate());
 }
 
 
@@ -405,27 +347,21 @@ async function getTime() {
         await syncLiveTime();
     }
 
-    const time =
-        formatLiveTime();
-
-    const date =
-        formatLiveDate();
-
     return (
-        `The current time is ${time}. ` +
-        `Today is ${date}.`
+        `The current time is ${getLiveTimeString()}. ` +
+        `Today is ${getLiveDateString()}.`
     );
 }
 
 
 /* =========================================================
-   LIVE CLOCK SUPPORT
+   LIVE CLOCK
    ========================================================= */
 
-function updateClockElements() {
+function updateClock() {
 
     const time =
-        formatLiveTime();
+        getLiveTimeString();
 
     const selectors = [
         "#clock",
@@ -440,10 +376,9 @@ function updateClockElements() {
         document
             .querySelectorAll(selector)
             .forEach(element => {
-
                 element.textContent = time;
-
             });
+
     });
 }
 
@@ -452,30 +387,27 @@ async function startLiveClock() {
 
     await syncLiveTime();
 
-    updateClockElements();
+    updateClock();
 
-    setInterval(async () => {
+    setInterval(
+        updateClock,
+        1000
+    );
 
-        await syncLiveTime();
-
-        updateClockElements();
-
-    }, 60000);
-
-    setInterval(() => {
-        updateClockElements();
-    }, 1000);
+    setInterval(
+        syncLiveTime,
+        60000
+    );
 }
 
 
 /* =========================================================
-   TIME COMMAND DETECTION
+   TIME COMMAND
    ========================================================= */
 
 function isTimeCommand(text) {
 
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
 
     return (
         t === "time" ||
@@ -483,11 +415,9 @@ function isTimeCommand(text) {
         t.includes("current time") ||
         t.includes("tell me the time") ||
         t.includes("time now") ||
-        t.includes("present time") ||
         t.includes("clock") ||
-        t.includes("సమయం") ||
         t.includes("టైమ్") ||
-        t.includes("ఇప్పుడు టైమ్")
+        t.includes("సమయం")
     );
 }
 
@@ -496,19 +426,18 @@ function isTimeCommand(text) {
    WEATHER
    ========================================================= */
 
-function getWeatherCodeDescription(code) {
+function weatherDescription(code) {
 
-    const map = {
-
+    const weather = {
         0: "clear sky",
         1: "mainly clear",
         2: "partly cloudy",
         3: "overcast",
         45: "foggy",
-        48: "depositing rime fog",
+        48: "foggy",
         51: "light drizzle",
         53: "moderate drizzle",
-        55: "dense drizzle",
+        55: "heavy drizzle",
         61: "light rain",
         63: "moderate rain",
         65: "heavy rain",
@@ -517,65 +446,65 @@ function getWeatherCodeDescription(code) {
         75: "heavy snow",
         80: "light rain showers",
         81: "moderate rain showers",
-        82: "violent rain showers",
+        82: "heavy rain showers",
         95: "thunderstorm",
         96: "thunderstorm with hail",
         99: "thunderstorm with heavy hail"
     };
 
-    return map[code] || "unknown conditions";
+    return weather[code] || "unknown conditions";
 }
 
 
 function getLocation() {
 
-    return new Promise((resolve, reject) => {
+    return new Promise(
+        (resolve, reject) => {
 
-        if (!navigator.geolocation) {
-            reject(
-                new Error(
-                    "Geolocation is not supported."
-                )
-            );
-            return;
-        }
+            if (!navigator.geolocation) {
 
-        navigator.geolocation.getCurrentPosition(
-            position => {
+                reject(
+                    new Error(
+                        "Geolocation unavailable"
+                    )
+                );
 
-                resolve({
-                    latitude:
-                        position.coords.latitude,
-
-                    longitude:
-                        position.coords.longitude
-                });
-
-            },
-
-            error => {
-                reject(error);
-            },
-
-            {
-                enableHighAccuracy: false,
-                timeout: 7000,
-                maximumAge: 300000
+                return;
             }
-        );
-    });
+
+            navigator.geolocation.getCurrentPosition(
+                position => {
+
+                    resolve({
+                        latitude:
+                            position.coords.latitude,
+
+                        longitude:
+                            position.coords.longitude
+                    });
+
+                },
+
+                error => {
+                    reject(error);
+                },
+
+                {
+                    enableHighAccuracy: false,
+                    timeout: 7000,
+                    maximumAge: 300000
+                }
+            );
+        }
+    );
 }
 
 
 async function getWeather() {
 
-    const now =
-        Date.now();
-
-    // 2 minute cache
     if (
         weatherCache &&
-        now - weatherCacheTime < 120000
+        Date.now() - weatherCacheTime < 120000
     ) {
         return weatherCache;
     }
@@ -586,7 +515,7 @@ async function getWeather() {
             await getLocation();
 
         const url =
-            `${JARVIS_CONFIG.WEATHER_API}` +
+            CONFIG.WEATHER_API +
             `?latitude=${location.latitude}` +
             `&longitude=${location.longitude}` +
             `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m` +
@@ -602,33 +531,22 @@ async function getWeather() {
         const current =
             data.current;
 
-        if (!current) {
-            throw new Error(
-                "Weather data unavailable"
-            );
-        }
-
-        const description =
-            getWeatherCodeDescription(
-                current.weather_code
-            );
-
-        const result =
-            `Current temperature is ${current.temperature_2m}°C, ` +
-            `feels like ${current.apparent_temperature}°C. ` +
+        const answer =
+            `Current temperature is ${current.temperature_2m}°C. ` +
+            `It feels like ${current.apparent_temperature}°C. ` +
             `Humidity is ${current.relative_humidity_2m}%. ` +
-            `Conditions are ${description}. ` +
+            `Conditions are ${weatherDescription(current.weather_code)}. ` +
             `Wind speed is ${current.wind_speed_10m} km/h.`;
 
-        weatherCache = result;
-        weatherCacheTime = now;
+        weatherCache = answer;
+        weatherCacheTime = Date.now();
 
-        return result;
+        return answer;
 
     } catch (error) {
 
         return (
-            "I couldn't access your live weather right now. " +
+            "I couldn't access live weather. " +
             "Please allow location permission and try again."
         );
     }
@@ -639,13 +557,10 @@ async function getWeather() {
    TIMER
    ========================================================= */
 
-function extractTimerSeconds(text) {
-
-    const t =
-        normalizeText(text);
+function getTimerSeconds(text) {
 
     let match =
-        t.match(
+        text.match(
             /(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\b/i
         );
 
@@ -654,7 +569,7 @@ function extractTimerSeconds(text) {
     }
 
     match =
-        t.match(
+        text.match(
             /(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|m)\b/i
         );
 
@@ -663,7 +578,7 @@ function extractTimerSeconds(text) {
     }
 
     match =
-        t.match(
+        text.match(
             /(\d+(?:\.\d+)?)\s*(hours?|hrs?|hr|h)\b/i
         );
 
@@ -677,52 +592,49 @@ function extractTimerSeconds(text) {
 
 function isTimerCommand(text) {
 
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
 
     return (
         t.includes("timer") ||
-        t.includes("set a timer") ||
-        t.includes("set timer") ||
         t.includes("countdown") ||
         t.includes("టైమర్")
     );
 }
 
 
-function setJarvisTimer(text) {
+function setTimer(text) {
 
     const seconds =
-        extractTimerSeconds(text);
+        getTimerSeconds(text);
 
     if (!seconds || seconds <= 0) {
 
         return (
-            "Please specify the timer duration, " +
-            "for example: set timer for 30 seconds."
+            "Please specify a duration. " +
+            "Example: set timer for 30 seconds."
         );
     }
 
-    if (currentTimer) {
-        clearTimeout(currentTimer);
+    if (timerID) {
+        clearTimeout(timerID);
     }
 
-    currentTimer =
-        setTimeout(() => {
+    timerID =
+        setTimeout(
+            () => {
 
-            reply(
-                "Timer finished.",
-                true
-            );
+                reply(
+                    "Timer finished."
+                );
 
-            currentTimer = null;
+                timerID = null;
 
-        }, seconds * 1000);
+            },
+            seconds * 1000
+        );
 
     return (
-        `Timer set for ${seconds} second` +
-        (seconds === 1 ? "" : "s") +
-        "."
+        `Timer set for ${seconds} seconds.`
     );
 }
 
@@ -731,10 +643,25 @@ function setJarvisTimer(text) {
    DICE / COIN
    ========================================================= */
 
+function isDiceCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.includes("dice") ||
+        t.includes("roll dice") ||
+        t.includes("roll a die") ||
+        t.includes("coin toss") ||
+        t.includes("flip coin") ||
+        t.includes("toss coin") ||
+        t === "coin"
+    );
+}
+
+
 function diceCommand(text) {
 
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
 
     if (
         t.includes("coin") ||
@@ -746,20 +673,19 @@ function diceCommand(text) {
                 ? "Heads"
                 : "Tails";
 
-        return `Coin toss result: ${result}.`;
+        return (
+            `Coin toss result: ${result}.`
+        );
     }
 
-    const sidesMatch =
+    const match =
         t.match(
             /(?:d|dice)\s*(\d+)/i
         );
 
     const sides =
-        sidesMatch
-            ? Math.max(
-                2,
-                Number(sidesMatch[1])
-              )
+        match
+            ? Math.max(2, Number(match[1]))
             : 6;
 
     const result =
@@ -774,26 +700,21 @@ function diceCommand(text) {
 }
 
 
-function isDiceCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.includes("dice") ||
-        t.includes("roll dice") ||
-        t.includes("roll a die") ||
-        t.includes("coin toss") ||
-        t.includes("toss coin") ||
-        t.includes("flip coin") ||
-        t.includes("coin")
-    );
-}
-
-
 /* =========================================================
    JOKE
    ========================================================= */
+
+function isJokeCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.includes("joke") ||
+        t.includes("make me laugh") ||
+        t.includes("జోక్")
+    );
+}
+
 
 async function getJoke() {
 
@@ -801,19 +722,20 @@ async function getJoke() {
 
         const data =
             await fetchJSON(
-                JARVIS_CONFIG.JOKE_API,
+                CONFIG.JOKE_API,
                 {},
                 7000
             );
 
         if (
-            data &&
             data.setup &&
             data.punchline
         ) {
 
             return (
-                `${data.setup}\n${data.punchline}`
+                data.setup +
+                "\n" +
+                data.punchline
             );
         }
 
@@ -826,23 +748,23 @@ async function getJoke() {
 }
 
 
-function isJokeCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.includes("joke") ||
-        t.includes("tell me a joke") ||
-        t.includes("make me laugh") ||
-        t.includes("జోక్")
-    );
-}
-
-
 /* =========================================================
    QUOTE
    ========================================================= */
+
+function isQuoteCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.includes("quote") ||
+        t.includes("motivation") ||
+        t.includes("motivational") ||
+        t.includes("inspire me") ||
+        t.includes("మోటివేషన్")
+    );
+}
+
 
 async function getQuote() {
 
@@ -850,7 +772,7 @@ async function getQuote() {
 
         const data =
             await fetchJSON(
-                JARVIS_CONFIG.QUOTE_API,
+                CONFIG.QUOTE_API,
                 {},
                 7000
             );
@@ -870,62 +792,9 @@ async function getQuote() {
 }
 
 
-function isQuoteCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.includes("quote") ||
-        t.includes("motivation") ||
-        t.includes("motivational") ||
-        t.includes("inspire me") ||
-        t.includes("మోటివేషన్") ||
-        t.includes("కోట")
-    );
-}
-
-
 /* =========================================================
-   TRANSLATION
+   TRANSLATE
    ========================================================= */
-
-function extractTranslation(text) {
-
-    let match =
-        text.match(
-            /translate\s+(.+?)\s+(?:to|into)\s+([a-zA-Z-]+)$/i
-        );
-
-    if (match) {
-
-        return {
-            phrase: match[1].trim(),
-            language: match[2].trim()
-        };
-    }
-
-    match =
-        text.match(
-            /(.+?)\s+(?:to|into)\s+([a-zA-Z-]+)$/i
-        );
-
-    if (
-        match &&
-        (
-            normalizeText(text).includes("translate")
-        )
-    ) {
-
-        return {
-            phrase: match[1].trim(),
-            language: match[2].trim()
-        };
-    }
-
-    return null;
-}
-
 
 const languageCodes = {
 
@@ -939,6 +808,7 @@ const languageCodes = {
     bengali: "bn",
     gujarati: "gu",
     punjabi: "pa",
+
     french: "fr",
     german: "de",
     spanish: "es",
@@ -951,28 +821,53 @@ const languageCodes = {
 };
 
 
+function isTranslateCommand(text) {
+
+    return normalize(text)
+        .includes("translate");
+}
+
+
+function getTranslationInfo(text) {
+
+    const match =
+        text.match(
+            /translate\s+(.+?)\s+(?:to|into)\s+([a-zA-Z-]+)$/i
+        );
+
+    if (!match) {
+        return null;
+    }
+
+    return {
+        phrase: match[1].trim(),
+        language: match[2].trim()
+    };
+}
+
+
 async function translateText(text) {
 
     const info =
-        extractTranslation(text);
+        getTranslationInfo(text);
 
     if (!info) {
 
         return (
-            "Use translation like: " +
-            "translate hello to Telugu."
+            "Example: translate hello to Telugu."
         );
     }
 
     const target =
         languageCodes[
-            normalizeText(info.language)
-        ] || info.language;
+            normalize(info.language)
+        ] ||
+        info.language;
 
     try {
 
         const url =
-            `${JARVIS_CONFIG.TRANSLATE_API}` +
+            CONFIG.TRANSLATE_API +
             `?q=${encodeURIComponent(info.phrase)}` +
             `&langpair=en|${encodeURIComponent(target)}`;
 
@@ -983,31 +878,24 @@ async function translateText(text) {
                 8000
             );
 
-        const result =
+        const translated =
             data?.responseData?.translatedText;
 
-        if (result) {
+        if (translated) {
 
             return (
-                `Translation: ${result}`
+                `Translation: ${translated}`
             );
         }
 
     } catch (error) {}
 
     return (
-        "Translation service is temporarily unavailable."
+        "Translation service is unavailable right now."
     );
 }
-
-
-function isTranslateCommand(text) {
-
-    return normalizeText(text)
-        .includes("translate");
-}
 /* =========================================================
-   J.A.R.V.I.S
+   J.A.R.V.I.S COMPLETE SCRIPT
    PART 2
    ========================================================= */
 
@@ -1016,7 +904,7 @@ function isTranslateCommand(text) {
    CURRENCY
    ========================================================= */
 
-const currencyNames = {
+const currencyMap = {
 
     usd: "USD",
     dollar: "USD",
@@ -1028,40 +916,62 @@ const currencyNames = {
 
     eur: "EUR",
     euro: "EUR",
+    euros: "EUR",
 
     gbp: "GBP",
     pound: "GBP",
+    pounds: "GBP",
 
     jpy: "JPY",
     yen: "JPY",
 
     aud: "AUD",
     cad: "CAD",
+
     aed: "AED",
     sar: "SAR",
     cny: "CNY"
 };
 
 
-function findCurrencyCode(value) {
+function currencyCode(value) {
 
     const clean =
-        normalizeText(value);
+        normalize(value);
 
     return (
-        currencyNames[clean] ||
+        currencyMap[clean] ||
         clean.toUpperCase()
     );
 }
 
 
-function extractCurrency(text) {
+function isCurrencyCommand(text) {
 
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
+
+    return (
+        t.includes("currency") ||
+        (
+            t.includes("convert") &&
+            (
+                t.includes("usd") ||
+                t.includes("inr") ||
+                t.includes("eur") ||
+                t.includes("gbp") ||
+                t.includes("rupee") ||
+                t.includes("dollar")
+            )
+        ) ||
+        /\d+\s*(usd|inr|eur|gbp)\s+(to|in)\s+/i.test(t)
+    );
+}
+
+
+function parseCurrency(text) {
 
     let match =
-        t.match(
+        text.match(
             /(\d+(?:\.\d+)?)\s*([a-z]{3}|dollars?|rupees?|euros?|pounds?)\s+(?:to|in)\s+([a-z]{3}|dollars?|rupees?|euros?|pounds?)/i
         );
 
@@ -1069,22 +979,8 @@ function extractCurrency(text) {
 
         return {
             amount: Number(match[1]),
-            from: findCurrencyCode(match[2]),
-            to: findCurrencyCode(match[3])
-        };
-    }
-
-    match =
-        t.match(
-            /([a-z]{3}|dollars?|rupees?|euros?|pounds?)\s*(\d+(?:\.\d+)?)\s+(?:to|in)\s+([a-z]{3}|dollars?|rupees?|euros?|pounds?)/i
-        );
-
-    if (match) {
-
-        return {
-            amount: Number(match[2]),
-            from: findCurrencyCode(match[1]),
-            to: findCurrencyCode(match[3])
+            from: currencyCode(match[2]),
+            to: currencyCode(match[3])
         };
     }
 
@@ -1095,13 +991,12 @@ function extractCurrency(text) {
 async function convertCurrency(text) {
 
     const info =
-        extractCurrency(text);
+        parseCurrency(text);
 
     if (!info) {
 
         return (
-            "Use currency like: " +
-            "100 USD to INR."
+            "Use it like: 100 USD to INR."
         );
     }
 
@@ -1115,13 +1010,10 @@ async function convertCurrency(text) {
 
     try {
 
-        const url =
-            `${JARVIS_CONFIG.CURRENCY_API}` +
-            encodeURIComponent(info.from);
-
         const data =
             await fetchJSON(
-                url,
+                CONFIG.CURRENCY_API +
+                info.from,
                 {},
                 8000
             );
@@ -1150,45 +1042,32 @@ async function convertCurrency(text) {
 }
 
 
-function isCurrencyCommand(text) {
+/* =========================================================
+   MEANING
+   ========================================================= */
 
-    const t =
-        normalizeText(text);
+function isMeaningCommand(text) {
+
+    const t = normalize(text);
 
     return (
-        t.includes("currency") ||
-        t.includes("convert") &&
-        (
-            t.includes("usd") ||
-            t.includes("inr") ||
-            t.includes("eur") ||
-            t.includes("gbp") ||
-            t.includes("rupee") ||
-            t.includes("dollar")
-        )
+        t.startsWith("meaning of ") ||
+        t.startsWith("define ") ||
+        t.startsWith("definition of ")
     );
 }
 
 
-/* =========================================================
-   MEANING / DICTIONARY
-   ========================================================= */
-
 function extractWord(text) {
 
-    const t =
-        String(text || "").trim();
-
-    let match =
-        t.match(
-            /(?:meaning of|define|definition of|meaning)\s+(.+)$/i
+    const match =
+        text.match(
+            /(?:meaning of|define|definition of)\s+(.+)$/i
         );
 
-    if (match) {
-        return match[1].trim();
-    }
-
-    return null;
+    return match
+        ? match[1].trim()
+        : null;
 }
 
 
@@ -1200,28 +1079,23 @@ async function getMeaning(text) {
     if (!word) {
 
         return (
-            "Please ask like: meaning of intelligent."
+            "Example: meaning of intelligent."
         );
     }
 
     try {
 
-        const url =
-            JARVIS_CONFIG.DICTIONARY_API +
-            encodeURIComponent(word);
-
         const data =
             await fetchJSON(
-                url,
+                CONFIG.DICTIONARY_API +
+                encodeURIComponent(word),
                 {},
                 7000
             );
 
-        const entry =
-            data?.[0];
-
         const definition =
-            entry?.meanings?.[0]
+            data?.[0]
+                ?.meanings?.[0]
                 ?.definitions?.[0]
                 ?.definition;
 
@@ -1235,21 +1109,7 @@ async function getMeaning(text) {
     } catch (error) {}
 
     return (
-        `I couldn't find a dictionary definition for "${word}".`
-    );
-}
-
-
-function isMeaningCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.startsWith("meaning of ") ||
-        t.startsWith("define ") ||
-        t.startsWith("definition of ") ||
-        t.startsWith("meaning ")
+        `I couldn't find the meaning of "${word}".`
     );
 }
 
@@ -1257,6 +1117,19 @@ function isMeaningCommand(text) {
 /* =========================================================
    PASSWORD
    ========================================================= */
+
+function isPasswordCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.includes("password") ||
+        t.includes("generate password") ||
+        t.includes("strong password") ||
+        t.includes("పాస్వర్డ్")
+    );
+}
+
 
 function generatePassword(length = 16) {
 
@@ -1274,10 +1147,10 @@ function generatePassword(length = 16) {
         "abcdefghijkmnopqrstuvwxyz" +
         "23456789!@#$%^&*_-+=";
 
-    const values =
+    const random =
         new Uint32Array(length);
 
-    crypto.getRandomValues(values);
+    crypto.getRandomValues(random);
 
     let password = "";
 
@@ -1285,7 +1158,7 @@ function generatePassword(length = 16) {
 
         password +=
             chars[
-                values[i] % chars.length
+                random[i] % chars.length
             ];
     }
 
@@ -1296,33 +1169,16 @@ function generatePassword(length = 16) {
 function passwordCommand(text) {
 
     const match =
-        String(text || "")
-            .match(/\b(\d{1,2})\b/);
+        text.match(/\b(\d{1,2})\b/);
 
     const length =
         match
             ? Number(match[1])
             : 16;
 
-    const password =
-        generatePassword(length);
-
     return (
-        `Generated password:\n${password}`
-    );
-}
-
-
-function isPasswordCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.includes("password") ||
-        t.includes("generate password") ||
-        t.includes("strong password") ||
-        t.includes("పాస్వర్డ్")
+        `Generated strong password:\n` +
+        generatePassword(length)
     );
 }
 
@@ -1331,20 +1187,31 @@ function isPasswordCommand(text) {
    SEARCH
    ========================================================= */
 
+function isSearchCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.startsWith("search ") ||
+        t.startsWith("google ") ||
+        t.startsWith("look up ") ||
+        t.startsWith("find ")
+    );
+}
+
+
 function searchCommand(text) {
 
-    let query =
-        String(text || "")
-            .replace(
-                /^(search|google|look up|find)\s*/i,
-                ""
-            )
-            .trim();
+    const query =
+        text.replace(
+            /^(search|google|look up|find)\s*/i,
+            ""
+        ).trim();
 
     if (!query) {
 
         return (
-            "Tell me what you want me to search for."
+            "Tell me what you want to search."
         );
     }
 
@@ -1364,28 +1231,32 @@ function searchCommand(text) {
 }
 
 
-function isSearchCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.startsWith("search ") ||
-        t.startsWith("google ") ||
-        t.startsWith("look up ") ||
-        t.startsWith("find ")
-    );
-}
-
-
 /* =========================================================
    OPEN APPS
    ========================================================= */
 
+function isOpenAppCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.includes("open youtube") ||
+        t.includes("open google") ||
+        t.includes("open gmail") ||
+        t.includes("open whatsapp") ||
+        t.includes("open facebook") ||
+        t.includes("open instagram") ||
+        t.includes("open github") ||
+        t.includes("open maps") ||
+        t.includes("open spotify") ||
+        t.includes("open app")
+    );
+}
+
+
 function openApp(text) {
 
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
 
     const apps = {
 
@@ -1413,66 +1284,29 @@ function openApp(text) {
         maps:
             "https://maps.google.com/",
 
-        googlemaps:
-            "https://maps.google.com/",
-
         spotify:
-            "https://open.spotify.com/",
-
-        twitter:
-            "https://x.com/",
-
-        x:
-            "https://x.com/"
+            "https://open.spotify.com/"
     };
 
-    let selected = null;
+    for (const app in apps) {
 
-    for (const name in apps) {
+        if (t.includes(app)) {
 
-        if (t.includes(name)) {
-            selected = name;
-            break;
+            window.open(
+                apps[app],
+                "_blank",
+                "noopener,noreferrer"
+            );
+
+            return (
+                `Opening ${app}.`
+            );
         }
     }
 
-    if (!selected) {
-
-        return (
-            "Available apps: YouTube, Google, Gmail, " +
-            "WhatsApp, Facebook, Instagram, GitHub, " +
-            "Maps and Spotify."
-        );
-    }
-
-    window.open(
-        apps[selected],
-        "_blank",
-        "noopener,noreferrer"
-    );
-
     return (
-        `Opening ${selected}.`
-    );
-}
-
-
-function isOpenAppCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.includes("open youtube") ||
-        t.includes("open google") ||
-        t.includes("open gmail") ||
-        t.includes("open whatsapp") ||
-        t.includes("open facebook") ||
-        t.includes("open instagram") ||
-        t.includes("open github") ||
-        t.includes("open maps") ||
-        t.includes("open spotify") ||
-        t.includes("open app")
+        "Available apps include YouTube, Google, Gmail, " +
+        "WhatsApp, Instagram, Facebook, GitHub, Maps and Spotify."
     );
 }
 
@@ -1481,15 +1315,27 @@ function isOpenAppCommand(text) {
    PLAY SONGS
    ========================================================= */
 
+function isPlaySongCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t.startsWith("play ") ||
+        t.includes("play song") ||
+        t.includes("play music") ||
+        t.includes("పాట ప్లే") ||
+        t.includes("సాంగ్ ప్లే")
+    );
+}
+
+
 function playSong(text) {
 
     let query =
-        String(text || "")
-            .replace(
-                /^(play|play song|play music)\s*/i,
-                ""
-            )
-            .trim();
+        text.replace(
+            /^(play|play song|play music)\s*/i,
+            ""
+        ).trim();
 
     if (!query) {
         query = "trending music";
@@ -1511,26 +1357,11 @@ function playSong(text) {
 }
 
 
-function isPlaySongCommand(text) {
-
-    const t =
-        normalizeText(text);
-
-    return (
-        t.startsWith("play ") ||
-        t.includes("play song") ||
-        t.includes("play music") ||
-        t.includes("పాట ప్లే") ||
-        t.includes("సాంగ్ ప్లే")
-    );
-}
-
-
 /* =========================================================
    CRYPTO
    ========================================================= */
 
-const cryptoIds = {
+const cryptoIDs = {
 
     bitcoin: "bitcoin",
     btc: "bitcoin",
@@ -1552,67 +1383,9 @@ const cryptoIds = {
 };
 
 
-function findCrypto(text) {
-
-    const t =
-        normalizeText(text);
-
-    for (const name in cryptoIds) {
-
-        if (t.includes(name)) {
-            return cryptoIds[name];
-        }
-    }
-
-    return "bitcoin";
-}
-
-
-async function getCrypto(text) {
-
-    const id =
-        findCrypto(text);
-
-    try {
-
-        const url =
-            `${JARVIS_CONFIG.CRYPTO_API}` +
-            `?ids=${encodeURIComponent(id)}` +
-            `&vs_currencies=usd,inr`;
-
-        const data =
-            await fetchJSON(
-                url,
-                {},
-                8000
-            );
-
-        const coin =
-            data?.[id];
-
-        if (!coin) {
-            throw new Error("Crypto unavailable");
-        }
-
-        return (
-            `${id} price: ` +
-            `$${Number(coin.usd).toLocaleString()} ` +
-            `or ₹${Number(coin.inr).toLocaleString()}.`
-        );
-
-    } catch (error) {
-
-        return (
-            "I couldn't fetch the live crypto price right now."
-        );
-    }
-}
-
-
 function isCryptoCommand(text) {
 
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
 
     return (
         t.includes("crypto") ||
@@ -1627,9 +1400,73 @@ function isCryptoCommand(text) {
 }
 
 
+async function getCrypto(text) {
+
+    const t = normalize(text);
+
+    let coin = "bitcoin";
+
+    for (const key in cryptoIDs) {
+
+        if (t.includes(key)) {
+            coin = cryptoIDs[key];
+            break;
+        }
+    }
+
+    try {
+
+        const url =
+            CONFIG.CRYPTO_API +
+            `?ids=${encodeURIComponent(coin)}` +
+            `&vs_currencies=usd,inr`;
+
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                8000
+            );
+
+        const result =
+            data?.[coin];
+
+        if (!result) {
+            throw new Error("No crypto data");
+        }
+
+        return (
+            `${coin} current price is ` +
+            `$${Number(result.usd).toLocaleString()} ` +
+            `or ₹${Number(result.inr).toLocaleString()}.`
+        );
+
+    } catch (error) {
+
+        return (
+            "I couldn't fetch the live crypto price right now."
+        );
+    }
+}
+
+
 /* =========================================================
    NEWS
    ========================================================= */
+
+function isNewsCommand(text) {
+
+    const t = normalize(text);
+
+    return (
+        t === "news" ||
+        t.includes("latest news") ||
+        t.includes("today news") ||
+        t.includes("headlines") ||
+        t.includes("న్యూస్")
+    );
+}
+
 
 async function getNews() {
 
@@ -1637,29 +1474,26 @@ async function getNews() {
 
         const data =
             await fetchJSON(
-                JARVIS_CONFIG.NEWS_API,
+                CONFIG.NEWS_API,
                 {},
                 9000
             );
 
-        const articles =
-            Array.isArray(data?.items)
-                ? data.items.slice(0, 5)
-                : [];
+        const items =
+            data?.items?.slice(0, 5);
 
-        if (!articles.length) {
+        if (!items?.length) {
             throw new Error("No news");
         }
 
-        const lines =
-            articles.map(
-                (item, index) =>
-                    `${index + 1}. ${item.title}`
-            );
-
         return (
             "Latest headlines:\n" +
-            lines.join("\n")
+            items
+                .map(
+                    (item, index) =>
+                        `${index + 1}. ${item.title}`
+                )
+                .join("\n")
         );
 
     } catch (error) {
@@ -1671,34 +1505,28 @@ async function getNews() {
 }
 
 
-function isNewsCommand(text) {
+/* =========================================================
+   YOUTUBE
+   ========================================================= */
 
-    const t =
-        normalizeText(text);
+function isYouTubeCommand(text) {
+
+    const t = normalize(text);
 
     return (
-        t === "news" ||
-        t.includes("latest news") ||
-        t.includes("headlines") ||
-        t.includes("today news") ||
-        t.includes("న్యూస్")
+        t === "youtube" ||
+        t.startsWith("youtube ")
     );
 }
 
 
-/* =========================================================
-   YOUTUBE DIRECT SEARCH
-   ========================================================= */
-
 function youtubeCommand(text) {
 
     const query =
-        String(text || "")
-            .replace(
-                /^(youtube|play on youtube)\s*/i,
-                ""
-            )
-            .trim();
+        text.replace(
+            /^youtube\s*/i,
+            ""
+        ).trim();
 
     if (!query) {
 
@@ -1710,172 +1538,30 @@ function youtubeCommand(text) {
         return "Opening YouTube.";
     }
 
-    const url =
-        "https://www.youtube.com/results?search_query=" +
-        encodeURIComponent(query);
-
     window.open(
-        url,
+        "https://www.youtube.com/results?search_query=" +
+        encodeURIComponent(query),
         "_blank",
         "noopener,noreferrer"
     );
 
     return (
-        `Searching YouTube for ${query}.`
+        `Searching YouTube for "${query}".`
     );
 }
 
 
 /* =========================================================
-   COMMAND ROUTER
+   BASIC COMMANDS
    ========================================================= */
 
-async function handleTools(text) {
+function basicCommand(text) {
 
-    const t =
-        normalizeText(text);
-
-    /* TIME */
-    if (isTimeCommand(t)) {
-
-        if (!liveTimeSynced) {
-            await syncLiveTime();
-        }
-
-        return await getTime();
-    }
-
-
-    /* WEATHER */
-    if (
-        t === "weather" ||
-        t.includes("weather") ||
-        t.includes("temperature") ||
-        t.includes("వెదర్") ||
-        t.includes("వాతావరణం")
-    ) {
-
-        return await getWeather();
-    }
-
-
-    /* TIMER */
-    if (isTimerCommand(t)) {
-
-        return setJarvisTimer(t);
-    }
-
-
-    /* DICE / COIN */
-    if (isDiceCommand(t)) {
-
-        return diceCommand(t);
-    }
-
-
-    /* JOKE */
-    if (isJokeCommand(t)) {
-
-        return await getJoke();
-    }
-
-
-    /* QUOTE */
-    if (isQuoteCommand(t)) {
-
-        return await getQuote();
-    }
-
-
-    /* NEWS */
-    if (isNewsCommand(t)) {
-
-        return await getNews();
-    }
-
-
-    /* TRANSLATE */
-    if (isTranslateCommand(t)) {
-
-        return await translateText(text);
-    }
-
-
-    /* CURRENCY */
-    if (isCurrencyCommand(t)) {
-
-        return await convertCurrency(text);
-    }
-
-
-    /* MEANING */
-    if (isMeaningCommand(t)) {
-
-        return await getMeaning(text);
-    }
-
-
-    /* PASSWORD */
-    if (isPasswordCommand(t)) {
-
-        return passwordCommand(text);
-    }
-
-
-    /* OPEN APPS */
-    if (isOpenAppCommand(t)) {
-
-        return openApp(text);
-    }
-
-
-    /* PLAY SONG */
-    if (isPlaySongCommand(t)) {
-
-        return playSong(text);
-    }
-
-
-    /* CRYPTO */
-    if (isCryptoCommand(t)) {
-
-        return await getCrypto(text);
-    }
-
-
-    /* SEARCH */
-    if (isSearchCommand(t)) {
-
-        return searchCommand(text);
-    }
-
-
-    /* YOUTUBE */
-    if (
-        t.startsWith("youtube ") ||
-        t === "youtube"
-    ) {
-
-        return youtubeCommand(text);
-    }
-
-
-    return null;
-}
-
-
-/* =========================================================
-   GENERAL COMMANDS
-   ========================================================= */
-
-function handleBasicCommand(text) {
-
-    const t =
-        normalizeText(text);
+    const t = normalize(text);
 
     if (
-        t === "hello" ||
         t === "hi" ||
+        t === "hello" ||
         t === "hey" ||
         t.includes("hello jarvis") ||
         t.includes("hi jarvis")
@@ -1885,7 +1571,6 @@ function handleBasicCommand(text) {
             "Hello. J.A.R.V.I.S is online and ready."
         );
     }
-
 
     if (
         t.includes("who are you") ||
@@ -1897,29 +1582,162 @@ function handleBasicCommand(text) {
         );
     }
 
-
     if (
-        t === "thank you" ||
         t === "thanks" ||
-        t.includes("thank you jarvis")
+        t === "thank you"
     ) {
 
-        return (
-            "You're welcome."
-        );
+        return "You're welcome.";
+    }
+
+    return null;
+}
+
+
+/* =========================================================
+   TOOL ROUTER
+   ========================================================= */
+
+async function handleTools(text) {
+
+    const t = normalize(text);
+
+
+    /* 1 TIME */
+
+    if (isTimeCommand(t)) {
+
+        if (!liveTimeSynced) {
+            await syncLiveTime();
+        }
+
+        return await getTime();
     }
 
 
+    /* 2 WEATHER */
+
     if (
-        t === "clear" ||
-        t === "clear chat"
+        t === "weather" ||
+        t.includes("weather") ||
+        t.includes("temperature") ||
+        t.includes("వాతావరణం") ||
+        t.includes("వెదర్")
     ) {
 
-        clearMemory();
+        return await getWeather();
+    }
 
-        return (
-            "Chat memory cleared."
-        );
+
+    /* 3 TIMER */
+
+    if (isTimerCommand(t)) {
+
+        return setTimer(t);
+    }
+
+
+    /* 4 DICE / COIN */
+
+    if (isDiceCommand(t)) {
+
+        return diceCommand(t);
+    }
+
+
+    /* 5 JOKE */
+
+    if (isJokeCommand(t)) {
+
+        return await getJoke();
+    }
+
+
+    /* 6 QUOTE */
+
+    if (isQuoteCommand(t)) {
+
+        return await getQuote();
+    }
+
+
+    /* 7 NEWS */
+
+    if (isNewsCommand(t)) {
+
+        return await getNews();
+    }
+
+
+    /* 8 TRANSLATE */
+
+    if (isTranslateCommand(t)) {
+
+        return await translateText(text);
+    }
+
+
+    /* 9 CURRENCY */
+
+    if (isCurrencyCommand(t)) {
+
+        return await convertCurrency(text);
+    }
+
+
+    /* 10 MEANING */
+
+    if (isMeaningCommand(t)) {
+
+        return await getMeaning(text);
+    }
+
+
+    /* 11 PASSWORD */
+
+    if (isPasswordCommand(t)) {
+
+        return passwordCommand(text);
+    }
+
+
+    /* 12 SEARCH */
+
+    if (isSearchCommand(t)) {
+
+        return searchCommand(text);
+    }
+
+
+    /* 13 OPEN APPS */
+
+    if (isOpenAppCommand(t)) {
+
+        return openApp(text);
+    }
+
+
+    /* 14 PLAY SONGS */
+
+    if (isPlaySongCommand(t)) {
+
+        return playSong(text);
+    }
+
+
+    /* 15 CRYPTO */
+
+    if (isCryptoCommand(t)) {
+
+        return await getCrypto(text);
+    }
+
+
+    /* YOUTUBE */
+
+    if (isYouTubeCommand(t)) {
+
+        return youtubeCommand(text);
     }
 
 
@@ -1928,7 +1746,7 @@ function handleBasicCommand(text) {
 
 
 /* =========================================================
-   LOCAL MEMORY
+   MEMORY
    ========================================================= */
 
 function loadMemory() {
@@ -1937,7 +1755,7 @@ function loadMemory() {
 
         const data =
             localStorage.getItem(
-                JARVIS_CONFIG.STORAGE_KEY
+                CONFIG.MEMORY_KEY
             );
 
         return data
@@ -1956,18 +1774,17 @@ function saveMemory(memory) {
     try {
 
         localStorage.setItem(
-            JARVIS_CONFIG.STORAGE_KEY,
-            JSON.stringify(memory.slice(-50))
+            CONFIG.MEMORY_KEY,
+            JSON.stringify(
+                memory.slice(-50)
+            )
         );
 
     } catch (error) {}
 }
 
 
-function rememberConversation(
-    user,
-    assistant
-) {
+function remember(user, assistant) {
 
     const memory =
         loadMemory();
@@ -1975,63 +1792,32 @@ function rememberConversation(
     memory.push({
         user,
         assistant,
-        time: new Date().toISOString()
+        timestamp:
+            new Date().toISOString()
     });
 
     saveMemory(memory);
 }
 
 
-function clearMemory() {
-
-    try {
-
-        localStorage.removeItem(
-            JARVIS_CONFIG.STORAGE_KEY
-        );
-
-    } catch (error) {}
-
-    if (chat) {
-        chat.innerHTML = "";
-    }
-
-    reply(
-        "Memory and chat cleared.",
-        false
-    );
-}
-
-
 /* =========================================================
-   OPTIONAL AI FALLBACK
+   AI FALLBACK
    ========================================================= */
 
 async function aiFallback(text) {
 
-    /*
-       This is only used when the command is not one
-       of the 15 built-in tools.
-
-       Built-in tools are handled first, so they remain fast.
-    */
-
     try {
 
         const prompt =
-            `You are J.A.R.V.I.S, a concise personal AI assistant.
-Answer accurately and naturally.
+            `You are J.A.R.V.I.S, a helpful personal AI assistant.
+Give a short, accurate answer.
 User: ${text}`;
-
-        const url =
-            "https://text.pollinations.ai/" +
-            encodeURIComponent(prompt);
 
         const response =
             await fetch(
-                url,
+                "https://text.pollinations.ai/" +
+                encodeURIComponent(prompt),
                 {
-                    method: "GET",
                     cache: "no-store"
                 }
             );
@@ -2050,58 +1836,47 @@ User: ${text}`;
     } catch (error) {
 
         console.warn(
-            "AI fallback unavailable:",
+            "AI fallback error:",
             error
         );
     }
 
     return (
-        "I didn't understand that command. " +
-        "Try Time, Weather, Timer, Dice, Joke, Quote, " +
-        "News, Translate, Currency, Meaning, Password, " +
-        "Search, Open Apps, Play Songs, or Crypto."
+        "I couldn't understand that command. " +
+        "Try one of the available J.A.R.V.I.S features."
     );
 }
 
 
 /* =========================================================
-   MAIN EXECUTION
+   MAIN EXECUTOR
    ========================================================= */
-
-let commandBusy = false;
-
 
 async function executeCommand(text) {
 
     const command =
         String(text || "").trim();
 
-    if (!command) {
+    if (!command || busy) {
         return;
     }
 
-    if (commandBusy) {
-        return;
-    }
-
-    commandBusy = true;
+    busy = true;
 
     userMessage(command);
 
     try {
 
-        /*
-           First check local/basic commands.
-        */
+        /* BASIC */
 
         const basic =
-            handleBasicCommand(command);
+            basicCommand(command);
 
         if (basic) {
 
             reply(basic);
 
-            rememberConversation(
+            remember(
                 command,
                 basic
             );
@@ -2110,54 +1885,50 @@ async function executeCommand(text) {
         }
 
 
-        /*
-           Then check all screenshot tools.
-        */
+        /* 15 TOOLS */
 
-        const toolResult =
+        const tool =
             await handleTools(command);
 
-        if (toolResult) {
+        if (tool) {
 
-            reply(toolResult);
+            reply(tool);
 
-            rememberConversation(
+            remember(
                 command,
-                toolResult
+                tool
             );
 
             return;
         }
 
 
-        /*
-           Finally AI fallback.
-        */
+        /* AI */
 
-        const aiAnswer =
+        const answer =
             await aiFallback(command);
 
-        reply(aiAnswer);
+        reply(answer);
 
-        rememberConversation(
+        remember(
             command,
-            aiAnswer
+            answer
         );
 
     } catch (error) {
 
         console.error(
-            "JARVIS command error:",
+            "JARVIS error:",
             error
         );
 
         reply(
-            "Sorry, something went wrong while processing that command."
+            "Sorry, something went wrong."
         );
 
     } finally {
 
-        commandBusy = false;
+        busy = false;
     }
 }
 
@@ -2170,18 +1941,16 @@ if (sendBtn) {
 
     sendBtn.addEventListener(
         "click",
-        async () => {
+        () => {
 
             const text =
                 msg?.value?.trim();
 
-            if (!text) {
-                return;
-            }
+            if (!text) return;
 
             msg.value = "";
 
-            await executeCommand(text);
+            executeCommand(text);
         }
     );
 }
@@ -2195,7 +1964,7 @@ if (msg) {
 
     msg.addEventListener(
         "keydown",
-        async event => {
+        event => {
 
             if (event.key === "Enter") {
 
@@ -2204,13 +1973,11 @@ if (msg) {
                 const text =
                     msg.value.trim();
 
-                if (!text) {
-                    return;
-                }
+                if (!text) return;
 
                 msg.value = "";
 
-                await executeCommand(text);
+                executeCommand(text);
             }
         }
     );
@@ -2218,7 +1985,7 @@ if (msg) {
 
 
 /* =========================================================
-   CLEAR BUTTON
+   CLEAR MEMORY
    ========================================================= */
 
 if (clearBtn) {
@@ -2230,7 +1997,7 @@ if (clearBtn) {
             try {
 
                 localStorage.removeItem(
-                    JARVIS_CONFIG.STORAGE_KEY
+                    CONFIG.MEMORY_KEY
                 );
 
             } catch (error) {}
@@ -2239,9 +2006,8 @@ if (clearBtn) {
                 chat.innerHTML = "";
             }
 
-            reply(
-                "Memory cleared successfully.",
-                false
+            jarvisMessage(
+                "Memory cleared successfully."
             );
         }
     );
@@ -2249,10 +2015,10 @@ if (clearBtn) {
 
 
 /* =========================================================
-   VOICE RECOGNITION
+   VOICE INPUT
    ========================================================= */
 
-function setupVoiceRecognition() {
+function setupVoice() {
 
     const SpeechRecognition =
         window.SpeechRecognition ||
@@ -2262,7 +2028,7 @@ function setupVoiceRecognition() {
 
         if (micBtn) {
             micBtn.title =
-                "Voice recognition is not supported in this browser.";
+                "Speech recognition is not supported.";
         }
 
         return;
@@ -2278,12 +2044,14 @@ function setupVoiceRecognition() {
 
     recognition.onstart = () => {
 
-        isListening = true;
+        listening = true;
 
         if (micBtn) {
+
             micBtn.classList.add(
                 "listening"
             );
+
             micBtn.textContent = "🔴";
         }
     };
@@ -2291,34 +2059,32 @@ function setupVoiceRecognition() {
 
     recognition.onresult = event => {
 
-        const transcript =
+        const text =
             event.results?.[0]?.[0]?.transcript
-            ?.trim();
+                ?.trim();
 
-        if (!transcript) {
-            return;
-        }
+        if (!text) return;
 
         if (msg) {
-            msg.value = transcript;
+            msg.value = text;
         }
 
-        executeCommand(transcript);
+        executeCommand(text);
     };
 
 
-    recognition.onerror = event => {
+    recognition.onerror = error => {
 
         console.warn(
-            "Speech recognition error:",
-            event.error
+            "Voice error:",
+            error.error
         );
     };
 
 
     recognition.onend = () => {
 
-        isListening = false;
+        listening = false;
 
         if (micBtn) {
 
@@ -2337,23 +2103,20 @@ function setupVoiceRecognition() {
             "click",
             () => {
 
-                if (isListening) {
+                try {
 
-                    recognition.stop();
-
-                } else {
-
-                    try {
-
+                    if (listening) {
+                        recognition.stop();
+                    } else {
                         recognition.start();
-
-                    } catch (error) {
-
-                        console.warn(
-                            "Could not start microphone:",
-                            error
-                        );
                     }
+
+                } catch (error) {
+
+                    console.warn(
+                        "Microphone error:",
+                        error
+                    );
                 }
             }
         );
@@ -2362,15 +2125,18 @@ function setupVoiceRecognition() {
 
 
 /* =========================================================
-   CAMERA / IMAGE INPUT
+   CAMERA / IMAGE
    ========================================================= */
 
-if (camBtn && imgInput) {
+function setupCamera() {
+
+    if (!camBtn || !imgInput) {
+        return;
+    }
 
     camBtn.addEventListener(
         "click",
         () => {
-
             imgInput.click();
         }
     );
@@ -2378,14 +2144,12 @@ if (camBtn && imgInput) {
 
     imgInput.addEventListener(
         "change",
-        async event => {
+        event => {
 
             const file =
                 event.target.files?.[0];
 
-            if (!file) {
-                return;
-            }
+            if (!file) return;
 
             userMessage(
                 "Analyze this image."
@@ -2395,47 +2159,35 @@ if (camBtn && imgInput) {
                 "Image received. Analyzing..."
             );
 
-            /*
-               Basic browser-side image information.
-               This works without an external AI key.
-            */
-
             const image =
                 new Image();
 
-            const objectURL =
+            const url =
                 URL.createObjectURL(file);
 
             image.onload = () => {
 
-                const result =
-                    `Image loaded successfully. ` +
-                    `Size: ${image.width} × ${image.height}px. ` +
-                    `File type: ${file.type}.`;
-
                 reply(
-                    result,
+                    `Image loaded successfully. ` +
+                    `Resolution: ${image.width} × ${image.height}px. ` +
+                    `Type: ${file.type}.`,
                     false
                 );
 
-                URL.revokeObjectURL(
-                    objectURL
-                );
+                URL.revokeObjectURL(url);
             };
 
             image.onerror = () => {
 
-                URL.revokeObjectURL(
-                    objectURL
-                );
-
                 reply(
-                    "I couldn't read that image.",
+                    "I couldn't read this image.",
                     false
                 );
+
+                URL.revokeObjectURL(url);
             };
 
-            image.src = objectURL;
+            image.src = url;
 
             imgInput.value = "";
         }
@@ -2444,147 +2196,123 @@ if (camBtn && imgInput) {
 
 
 /* =========================================================
-   FEATURE CARD AUTO CLICK
+   FEATURE CARDS
    ========================================================= */
 
 function setupFeatureCards() {
 
-    const elements =
+    const all =
         document.querySelectorAll(
             "div, article, section, button"
         );
 
-    elements.forEach(element => {
-
-        /*
-           Only consider relatively small elements
-           containing one of the feature names.
-        */
-
-        const text =
-            normalizeText(
-                element.textContent
-            );
+    all.forEach(element => {
 
         if (
-            !text ||
-            text.length > 180
+            element === sendBtn ||
+            element === micBtn ||
+            element === camBtn ||
+            element === clearBtn
         ) {
             return;
         }
 
+        if (
+            element.dataset.jarvisBound === "1"
+        ) {
+            return;
+        }
+
+        const text =
+            normalize(
+                element.textContent
+            );
+
+        if (!text || text.length > 100) {
+            return;
+        }
 
         let command = null;
 
 
-        if (
-            text === "time" ||
-            text.startsWith("time ")
-        ) {
+        if (text === "time") {
+
             command = "time";
-        }
 
-        else if (
-            text === "weather" ||
-            text.startsWith("weather ")
-        ) {
+        } else if (text === "weather") {
+
             command = "weather";
-        }
 
-        else if (
-            text === "timer" ||
-            text.startsWith("timer ")
-        ) {
-            command = "set timer for 10 seconds";
-        }
+        } else if (text === "timer") {
 
-        else if (
+            command =
+                "set timer for 10 seconds";
+
+        } else if (
             text.includes("dice") ||
             text.includes("coin")
         ) {
+
             command = "roll dice";
-        }
 
-        else if (
-            text === "joke" ||
-            text.startsWith("joke ")
-        ) {
-            command = "tell me a joke";
-        }
+        } else if (text === "joke") {
 
-        else if (
-            text === "quote" ||
-            text.startsWith("quote ")
-        ) {
-            command = "give me a quote";
-        }
+            command =
+                "tell me a joke";
 
-        else if (
-            text === "news" ||
-            text.startsWith("news ")
-        ) {
-            command = "latest news";
-        }
+        } else if (text === "quote") {
 
-        else if (
-            text === "translate" ||
-            text.startsWith("translate ")
-        ) {
+            command =
+                "give me a motivational quote";
+
+        } else if (text === "news") {
+
+            command =
+                "latest news";
+
+        } else if (text === "translate") {
+
             command =
                 "translate hello to Telugu";
-        }
 
-        else if (
-            text === "currency" ||
-            text.startsWith("currency ")
-        ) {
+        } else if (text === "currency") {
+
             command =
                 "100 USD to INR";
-        }
 
-        else if (
-            text === "meaning" ||
-            text.startsWith("meaning ")
-        ) {
+        } else if (text === "meaning") {
+
             command =
                 "meaning of intelligent";
-        }
 
-        else if (
-            text === "password" ||
-            text.startsWith("password ")
-        ) {
+        } else if (text === "password") {
+
             command =
                 "generate strong password";
-        }
 
-        else if (
-            text === "search" ||
-            text.startsWith("search ")
-        ) {
+        } else if (text === "search") {
+
             command =
-                "search Google";
-        }
+                "search artificial intelligence";
 
-        else if (
+        } else if (
+            text === "open apps" ||
             text.includes("open apps")
         ) {
+
             command =
                 "open Google";
-        }
 
-        else if (
-            text.includes("play songs") ||
-            text.includes("play song")
+        } else if (
+            text === "play songs" ||
+            text.includes("play songs")
         ) {
+
             command =
                 "play trending music";
-        }
 
-        else if (
-            text === "crypto" ||
-            text.startsWith("crypto ")
-        ) {
+        } else if (text === "crypto") {
+
             command =
                 "Bitcoin price";
         }
@@ -2595,35 +2323,15 @@ function setupFeatureCards() {
         }
 
 
-        /*
-           Avoid adding duplicate listeners.
-        */
+        element.dataset.jarvisBound = "1";
 
-        if (
-            element.dataset.jarvisFeatureBound === "1"
-        ) {
-            return;
-        }
-
-        element.dataset.jarvisFeatureBound = "1";
+        element.style.cursor = "pointer";
 
         element.addEventListener(
             "click",
             event => {
 
-                /*
-                   Don't interfere with actual buttons
-                   that already have their own handlers.
-                */
-
-                if (
-                    element === sendBtn ||
-                    element === micBtn ||
-                    element === camBtn ||
-                    element === clearBtn
-                ) {
-                    return;
-                }
+                event.stopPropagation();
 
                 executeCommand(command);
             }
@@ -2633,49 +2341,60 @@ function setupFeatureCards() {
 
 
 /* =========================================================
-   STARTUP
+   START J.A.R.V.I.S
    ========================================================= */
 
-document.addEventListener(
-    "DOMContentLoaded",
-    async () => {
+function startJarvis() {
 
-        setupVoiceRecognition();
+    setupVoice();
 
-        setupFeatureCards();
+    setupCamera();
 
-        /*
-           Start live internet clock.
-           This does not block commands.
-        */
+    setupFeatureCards();
 
-        startLiveClock()
-            .catch(error => {
+    startLiveClock()
+        .catch(
+            error =>
                 console.warn(
-                    "Live clock startup failed:",
+                    "Clock startup error:",
                     error
-                );
-            });
+                )
+        );
 
-        /*
-           Welcome message only if chat is empty.
-        */
+    if (
+        chat &&
+        chat.children.length === 0
+    ) {
 
-        if (
-            chat &&
-            chat.children.length === 0
-        ) {
-
-            jarvisMessage(
-                "J.A.R.V.I.S online. All systems ready."
-            );
-        }
+        jarvisMessage(
+            "J.A.R.V.I.S online. All systems ready.",
+            false
+        );
     }
-);
+}
 
 
 /* =========================================================
-   GLOBAL FALLBACK
+   INITIALIZE
+   ========================================================= */
+
+if (
+    document.readyState === "loading"
+) {
+
+    document.addEventListener(
+        "DOMContentLoaded",
+        startJarvis
+    );
+
+} else {
+
+    startJarvis();
+}
+
+
+/* =========================================================
+   GLOBAL ACCESS
    ========================================================= */
 
 window.JARVIS = {
