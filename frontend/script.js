@@ -1,2215 +1,2688 @@
+/* =========================================================
+   J.A.R.V.I.S - COMPLETE WORKING SCRIPT
+   PART 1
+   ========================================================= */
+
 "use strict";
 
-(() => {
+/* =========================================================
+   CONFIG
+   ========================================================= */
 
-  /* =========================================================
-     J.A.R.V.I.S. SCRIPT
-     PART 1 / 2
-     ========================================================= */
+const JARVIS_CONFIG = {
+    TIME_ZONE: "Asia/Kolkata",
 
-  const chat = document.getElementById("chat");
-  const msg = document.getElementById("msg");
-  const send = document.getElementById("send");
-  const micBtn = document.getElementById("mic-btn");
-  const camBtn = document.getElementById("cam-btn");
-  const clearBtn = document.getElementById("clear-btn");
-  const imgInput = document.getElementById("img-input");
+    // Live time APIs - first one is tried first
+    TIME_APIS: [
+        "https://timeapi.io/api/Time/current/zone?timeZone=Asia/Kolkata",
+        "https://utctime.app/api/now/Asia/Kolkata"
+    ],
 
-  if (!chat || !msg || !send) {
-    console.error("JARVIS: Required HTML elements are missing.");
-    return;
-  }
+    WEATHER_API:
+        "https://api.open-meteo.com/v1/forecast",
 
-  let recognition = null;
-  let listening = false;
-  let busy = false;
-  let timerNumber = 0;
+    DICTIONARY_API:
+        "https://api.dictionaryapi.dev/api/v2/entries/en/",
 
-  const MEMORY_KEY = "JARVIS_MEMORY";
+    TRANSLATE_API:
+        "https://api.mymemory.translated.net/get",
 
-  /* =========================================================
-     HELPERS
-     ========================================================= */
+    CURRENCY_API:
+        "https://open.er-api.com/v6/latest/",
 
-  const clean = value =>
-    String(value ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
+    CRYPTO_API:
+        "https://api.coingecko.com/api/v3/simple/price",
 
-  const lower = value =>
-    clean(value).toLowerCase();
+    JOKE_API:
+        "https://official-joke-api.appspot.com/random_joke",
 
-  function showChat() {
-    chat.style.display = "block";
-  }
+    QUOTE_API:
+        "https://dummyjson.com/quotes/random",
 
-  function addMessage(title, text, type = "") {
+    NEWS_API:
+        "https://api.rss2json.com/v1/api.json?rss_url=" +
+        encodeURIComponent(
+            "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en"
+        ),
 
-    showChat();
+    STORAGE_KEY: "jarvis_memory_v2"
+};
 
-    const box = document.createElement("div");
 
-    box.className =
-      "jarvis-message " + type;
+/* =========================================================
+   DOM ELEMENTS
+   ========================================================= */
 
-    box.style.margin = "8px 0";
-    box.style.padding = "9px 12px";
-    box.style.borderRadius = "10px";
-    box.style.whiteSpace = "pre-wrap";
-    box.style.wordBreak = "break-word";
+const chat =
+    document.getElementById("chat");
 
-    const name = document.createElement("div");
+const msg =
+    document.getElementById("msg");
 
-    name.textContent = title;
+const sendBtn =
+    document.getElementById("send");
 
-    name.style.fontWeight = "bold";
-    name.style.marginBottom = "4px";
+const micBtn =
+    document.getElementById("mic-btn");
 
-    const content = document.createElement("div");
+const camBtn =
+    document.getElementById("cam-btn");
 
-    content.textContent = clean(text);
+const clearBtn =
+    document.getElementById("clear-btn");
 
-    box.appendChild(name);
-    box.appendChild(content);
+const imgInput =
+    document.getElementById("img-input");
 
-    chat.appendChild(box);
 
-    chat.scrollTop = chat.scrollHeight;
+/* =========================================================
+   STATE
+   ========================================================= */
 
-    return box;
-  }
+let liveTimeOffset = 0;
+let liveTimeSynced = false;
+let timeSyncPromise = null;
 
-  function userMessage(text) {
-    addMessage("YOU", text, "user-message");
-  }
+let recognition = null;
+let isListening = false;
 
-  function jarvisMessage(text) {
-    addMessage("J.A.R.V.I.S.", text, "assistant-message");
-  }
+let currentTimer = null;
 
-  function reply(text, speakIt = true) {
+let weatherCache = null;
+let weatherCacheTime = 0;
 
-    const answer = clean(text);
 
-    if (!answer) return;
+/* =========================================================
+   BASIC HELPERS
+   ========================================================= */
 
-    jarvisMessage(answer);
+function normalizeText(text) {
+    return String(text || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+}
 
-    saveMemory("lastResponse", answer);
 
-    if (speakIt) {
-      speak(answer);
-    }
-  }
+function escapeHTML(text) {
+    const div = document.createElement("div");
+    div.textContent = String(text ?? "");
+    return div.innerHTML;
+}
 
-  /* =========================================================
-     MEMORY
-     ========================================================= */
 
-  function getMemory() {
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    try {
-      return JSON.parse(
-        localStorage.getItem(MEMORY_KEY) || "{}"
-      );
-    } catch {
-      return {};
-    }
-  }
 
-  function saveMemory(key, value) {
+async function fetchJSON(url, options = {}, timeout = 10000) {
 
-    try {
+    const controller = new AbortController();
 
-      const memory = getMemory();
-
-      memory[key] = value;
-
-      localStorage.setItem(
-        MEMORY_KEY,
-        JSON.stringify(memory)
-      );
-
-    } catch (e) {
-      console.warn("Memory error:", e);
-    }
-  }
-
-  function clearMemory() {
-
-    try {
-      localStorage.removeItem(MEMORY_KEY);
-    } catch {}
-
-    chat.innerHTML = "";
-    showChat();
-
-    reply(
-      "Memory cleared successfully, Boss."
-    );
-  }
-
-  /* =========================================================
-     SPEECH
-     ========================================================= */
-
-  function speak(text) {
-
-    if (!("speechSynthesis" in window)) {
-      return;
-    }
+    const timer = setTimeout(() => {
+        controller.abort();
+    }, timeout);
 
     try {
 
-      speechSynthesis.cancel();
-
-      const u =
-        new SpeechSynthesisUtterance(
-          clean(text)
-        );
-
-      u.rate = 0.95;
-      u.pitch = 1;
-      u.volume = 1;
-
-      const voices =
-        speechSynthesis.getVoices();
-
-      const voice =
-        voices.find(v =>
-          /en-IN/i.test(v.lang)
-        ) ||
-        voices.find(v =>
-          /en-US/i.test(v.lang)
-        ) ||
-        voices.find(v =>
-          /en-GB/i.test(v.lang)
-        );
-
-      if (voice) {
-        u.voice = voice;
-      }
-
-      speechSynthesis.speak(u);
-
-    } catch (e) {
-      console.warn("TTS error:", e);
-    }
-  }
-
-  /* =========================================================
-     SAFE FETCH
-     ========================================================= */
-
-  async function fetchJSON(
-    url,
-    options = {},
-    timeout = 12000
-  ) {
-
-    const controller =
-      new AbortController();
-
-    const timer =
-      setTimeout(
-        () => controller.abort(),
-        timeout
-      );
-
-    try {
-
-      const response =
-        await fetch(
-          url,
-          {
+        const response = await fetch(url, {
             ...options,
-            signal: controller.signal
-          }
-        );
+            signal: controller.signal,
+            cache: "no-store"
+        });
 
-      if (!response.ok) {
-        throw new Error(
-          "HTTP " + response.status
-        );
-      }
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
 
-      return await response.json();
+        return await response.json();
 
     } finally {
 
-      clearTimeout(timer);
+        clearTimeout(timer);
     }
-  }
+}
 
-  /* =========================================================
-     01. TIME
-     ========================================================= */
 
-  function getTime() {
+/* =========================================================
+   CHAT OUTPUT
+   ========================================================= */
 
-    const now = new Date();
+function addMessage(text, type = "jarvis") {
 
-    const time =
-      now.toLocaleTimeString(
-        "en-IN",
-        {
-          hour: "numeric",
-          minute: "2-digit",
-          second: "2-digit"
+    if (!chat) return;
+
+    const div = document.createElement("div");
+
+    div.className =
+        type === "user"
+            ? "user-message"
+            : "jarvis-message";
+
+    div.innerHTML = escapeHTML(text)
+        .replace(/\n/g, "<br>");
+
+    chat.appendChild(div);
+
+    chat.scrollTop = chat.scrollHeight;
+}
+
+
+function userMessage(text) {
+    addMessage(text, "user");
+}
+
+
+function jarvisMessage(text) {
+    addMessage(text, "jarvis");
+}
+
+
+function reply(text, speakIt = true) {
+
+    const clean = String(text || "")
+        .trim();
+
+    if (!clean) return "";
+
+    // IMPORTANT:
+    // Always display response in chat box
+    jarvisMessage(clean);
+
+    if (speakIt) {
+        speak(clean);
+    }
+
+    return clean;
+}
+
+
+/* =========================================================
+   TEXT TO SPEECH
+   ========================================================= */
+
+function speak(text) {
+
+    if (!("speechSynthesis" in window)) {
+        return;
+    }
+
+    try {
+
+        window.speechSynthesis.cancel();
+
+        const utterance =
+            new SpeechSynthesisUtterance(
+                String(text)
+            );
+
+        utterance.lang = "en-IN";
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+
+        window.speechSynthesis.speak(
+            utterance
+        );
+
+    } catch (error) {
+        console.warn("Speech error:", error);
+    }
+}
+
+
+/* =========================================================
+   LIVE INTERNET TIME
+   ========================================================= */
+
+function parseTimeAPI(data) {
+
+    if (!data) return null;
+
+    let dateValue = null;
+
+    // timeapi.io
+    if (data.dateTime) {
+        dateValue = new Date(data.dateTime);
+    }
+
+    // utcTime / datetime / dateTime variants
+    if (
+        !dateValue ||
+        Number.isNaN(dateValue.getTime())
+    ) {
+
+        const candidates = [
+            data.utc_datetime,
+            data.utcDateTime,
+            data.datetime,
+            data.dateTime,
+            data.currentDateTime,
+            data.timestamp
+        ];
+
+        for (const value of candidates) {
+
+            if (!value) continue;
+
+            const d = new Date(value);
+
+            if (!Number.isNaN(d.getTime())) {
+                dateValue = d;
+                break;
+            }
         }
-      );
+    }
+
+    if (
+        !dateValue ||
+        Number.isNaN(dateValue.getTime())
+    ) {
+        return null;
+    }
+
+    return dateValue;
+}
+
+
+async function syncLiveTime() {
+
+    if (timeSyncPromise) {
+        return timeSyncPromise;
+    }
+
+    timeSyncPromise = (async () => {
+
+        const requestStart =
+            Date.now();
+
+        for (const api of JARVIS_CONFIG.TIME_APIS) {
+
+            try {
+
+                const data =
+                    await fetchJSON(
+                        api,
+                        {},
+                        5000
+                    );
+
+                const serverDate =
+                    parseTimeAPI(data);
+
+                if (!serverDate) {
+                    continue;
+                }
+
+                const requestEnd =
+                    Date.now();
+
+                const networkDelay =
+                    (requestEnd - requestStart) / 2;
+
+                liveTimeOffset =
+                    serverDate.getTime()
+                    + networkDelay
+                    - Date.now();
+
+                liveTimeSynced = true;
+
+                return true;
+
+            } catch (error) {
+
+                console.warn(
+                    "Time API failed:",
+                    api,
+                    error
+                );
+            }
+        }
+
+        liveTimeSynced = false;
+        return false;
+
+    })();
+
+    try {
+        return await timeSyncPromise;
+    } finally {
+        timeSyncPromise = null;
+    }
+}
+
+
+function getLiveDate() {
+
+    return new Date(
+        Date.now() + liveTimeOffset
+    );
+}
+
+
+function formatLiveTime() {
 
     const date =
-      now.toLocaleDateString(
+        getLiveDate();
+
+    return new Intl.DateTimeFormat(
         "en-IN",
         {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-          year: "numeric"
+            timeZone:
+                JARVIS_CONFIG.TIME_ZONE,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: true
         }
-      );
+    ).format(date);
+}
+
+
+function formatLiveDate() {
+
+    const date =
+        getLiveDate();
+
+    return new Intl.DateTimeFormat(
+        "en-IN",
+        {
+            timeZone:
+                JARVIS_CONFIG.TIME_ZONE,
+            weekday: "long",
+            day: "2-digit",
+            month: "long",
+            year: "numeric"
+        }
+    ).format(date);
+}
+
+
+async function getTime() {
+
+    if (!liveTimeSynced) {
+        await syncLiveTime();
+    }
+
+    const time =
+        formatLiveTime();
+
+    const date =
+        formatLiveDate();
 
     return (
-      "The current time is " +
-      time +
-      ". Today is " +
-      date +
-      ", Boss."
+        `The current time is ${time}. ` +
+        `Today is ${date}.`
     );
-  }
+}
 
-  /* =========================================================
-     02. WEATHER
-     ========================================================= */
 
-  function getLocation() {
+/* =========================================================
+   LIVE CLOCK SUPPORT
+   ========================================================= */
 
-    return new Promise(
-      (resolve, reject) => {
+function updateClockElements() {
 
-        if (!navigator.geolocation) {
+    const time =
+        formatLiveTime();
 
-          reject(
-            new Error(
-              "Geolocation unavailable"
-            )
-          );
+    const selectors = [
+        "#clock",
+        "#time",
+        "#current-time",
+        ".clock",
+        ".time"
+    ];
 
-          return;
-        }
+    selectors.forEach(selector => {
 
-        navigator.geolocation.getCurrentPosition(
-          resolve,
-          reject,
-          {
-            enableHighAccuracy: false,
-            timeout: 10000,
-            maximumAge: 300000
-          }
-        );
-      }
+        document
+            .querySelectorAll(selector)
+            .forEach(element => {
+
+                element.textContent = time;
+
+            });
+    });
+}
+
+
+async function startLiveClock() {
+
+    await syncLiveTime();
+
+    updateClockElements();
+
+    setInterval(async () => {
+
+        await syncLiveTime();
+
+        updateClockElements();
+
+    }, 60000);
+
+    setInterval(() => {
+        updateClockElements();
+    }, 1000);
+}
+
+
+/* =========================================================
+   TIME COMMAND DETECTION
+   ========================================================= */
+
+function isTimeCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t === "time" ||
+        t.includes("what time") ||
+        t.includes("current time") ||
+        t.includes("tell me the time") ||
+        t.includes("time now") ||
+        t.includes("present time") ||
+        t.includes("clock") ||
+        t.includes("సమయం") ||
+        t.includes("టైమ్") ||
+        t.includes("ఇప్పుడు టైమ్")
     );
-  }
+}
 
-  function weatherText(code) {
+
+/* =========================================================
+   WEATHER
+   ========================================================= */
+
+function getWeatherCodeDescription(code) {
 
     const map = {
 
-      0: "Clear sky",
-      1: "Mainly clear",
-      2: "Partly cloudy",
-      3: "Overcast",
-
-      45: "Fog",
-      48: "Fog",
-
-      51: "Light drizzle",
-      53: "Moderate drizzle",
-      55: "Heavy drizzle",
-
-      61: "Light rain",
-      63: "Moderate rain",
-      65: "Heavy rain",
-
-      71: "Light snow",
-      73: "Moderate snow",
-      75: "Heavy snow",
-
-      80: "Light rain showers",
-      81: "Moderate rain showers",
-      82: "Heavy rain showers",
-
-      95: "Thunderstorm",
-      96: "Thunderstorm with hail",
-      99: "Thunderstorm with heavy hail"
+        0: "clear sky",
+        1: "mainly clear",
+        2: "partly cloudy",
+        3: "overcast",
+        45: "foggy",
+        48: "depositing rime fog",
+        51: "light drizzle",
+        53: "moderate drizzle",
+        55: "dense drizzle",
+        61: "light rain",
+        63: "moderate rain",
+        65: "heavy rain",
+        71: "light snow",
+        73: "moderate snow",
+        75: "heavy snow",
+        80: "light rain showers",
+        81: "moderate rain showers",
+        82: "violent rain showers",
+        95: "thunderstorm",
+        96: "thunderstorm with hail",
+        99: "thunderstorm with heavy hail"
     };
 
-    return map[code] || "Unknown conditions";
-  }
+    return map[code] || "unknown conditions";
+}
 
-  async function getWeather() {
+
+function getLocation() {
+
+    return new Promise((resolve, reject) => {
+
+        if (!navigator.geolocation) {
+            reject(
+                new Error(
+                    "Geolocation is not supported."
+                )
+            );
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+            position => {
+
+                resolve({
+                    latitude:
+                        position.coords.latitude,
+
+                    longitude:
+                        position.coords.longitude
+                });
+
+            },
+
+            error => {
+                reject(error);
+            },
+
+            {
+                enableHighAccuracy: false,
+                timeout: 7000,
+                maximumAge: 300000
+            }
+        );
+    });
+}
+
+
+async function getWeather() {
+
+    const now =
+        Date.now();
+
+    // 2 minute cache
+    if (
+        weatherCache &&
+        now - weatherCacheTime < 120000
+    ) {
+        return weatherCache;
+    }
 
     try {
 
-      const position =
-        await getLocation();
+        const location =
+            await getLocation();
 
-      const lat =
-        position.coords.latitude;
+        const url =
+            `${JARVIS_CONFIG.WEATHER_API}` +
+            `?latitude=${location.latitude}` +
+            `&longitude=${location.longitude}` +
+            `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m` +
+            `&timezone=auto`;
 
-      const lon =
-        position.coords.longitude;
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                8000
+            );
 
-      const url =
-        "https://api.open-meteo.com/v1/forecast" +
-        "?latitude=" + encodeURIComponent(lat) +
-        "&longitude=" + encodeURIComponent(lon) +
-        "&current=" +
-        "temperature_2m," +
-        "apparent_temperature," +
-        "relative_humidity_2m," +
-        "wind_speed_10m," +
-        "weather_code" +
-        "&timezone=auto";
+        const current =
+            data.current;
 
-      const data =
-        await fetchJSON(url);
+        if (!current) {
+            throw new Error(
+                "Weather data unavailable"
+            );
+        }
 
-      const c =
-        data.current;
+        const description =
+            getWeatherCodeDescription(
+                current.weather_code
+            );
 
-      return (
-        "Current weather: " +
-        weatherText(c.weather_code) +
-        ". Temperature is " +
-        c.temperature_2m +
-        "°C. Feels like " +
-        c.apparent_temperature +
-        "°C. Humidity is " +
-        c.relative_humidity_2m +
-        "%. Wind speed is " +
-        c.wind_speed_10m +
-        " km/h."
-      );
+        const result =
+            `Current temperature is ${current.temperature_2m}°C, ` +
+            `feels like ${current.apparent_temperature}°C. ` +
+            `Humidity is ${current.relative_humidity_2m}%. ` +
+            `Conditions are ${description}. ` +
+            `Wind speed is ${current.wind_speed_10m} km/h.`;
 
-    } catch (e) {
+        weatherCache = result;
+        weatherCacheTime = now;
 
-      return (
-        "I could not get live weather. " +
-        "Please allow location permission and try again."
-      );
+        return result;
+
+    } catch (error) {
+
+        return (
+            "I couldn't access your live weather right now. " +
+            "Please allow location permission and try again."
+        );
     }
-  }
+}
 
-  /* =========================================================
-     03. TIMER
-     ========================================================= */
 
-  function createTimer(text) {
+/* =========================================================
+   TIMER
+   ========================================================= */
 
-    const match =
-      clean(text).match(
-        /(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)/i
-      );
-
-    if (!match) {
-
-      return (
-        "Please specify the timer duration, for example: " +
-        "timer 10 seconds."
-      );
-    }
-
-    const amount =
-      Number(match[1]);
-
-    const unit =
-      match[2].toLowerCase();
-
-    let milliseconds;
-
-    if (/hour|hr/.test(unit)) {
-
-      milliseconds =
-        amount * 60 * 60 * 1000;
-
-    } else if (/minute|min/.test(unit)) {
-
-      milliseconds =
-        amount * 60 * 1000;
-
-    } else {
-
-      milliseconds =
-        amount * 1000;
-    }
-
-    const id =
-      ++timerNumber;
-
-    setTimeout(
-      () => {
-
-        const text =
-          "Timer " +
-          id +
-          " is complete, Boss.";
-
-        jarvisMessage(text);
-        speak(text);
-
-      },
-      milliseconds
-    );
-
-    return (
-      "Timer " +
-      id +
-      " set for " +
-      amount +
-      " " +
-      unit +
-      "."
-    );
-  }
-
-  /* =========================================================
-     04. DICE / COIN
-     ========================================================= */
-
-  function diceCoin(text) {
+function extractTimerSeconds(text) {
 
     const t =
-      lower(text);
+        normalizeText(text);
 
-    if (
-      t.includes("coin") ||
-      t.includes("flip") ||
-      t.includes("toss") ||
-      t.includes("కాయిన్")
-    ) {
+    let match =
+        t.match(
+            /(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\b/i
+        );
 
-      const result =
-        Math.random() < 0.5
-          ? "Heads"
-          : "Tails";
-
-      return (
-        "Coin toss result: " +
-        result +
-        "."
-      );
+    if (match) {
+        return Number(match[1]);
     }
 
-    let sides = 6;
+    match =
+        t.match(
+            /(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|m)\b/i
+        );
 
-    const match =
-      t.match(
-        /(?:d|dice)\s*(\d+)/
-      );
+    if (match) {
+        return Number(match[1]) * 60;
+    }
+
+    match =
+        t.match(
+            /(\d+(?:\.\d+)?)\s*(hours?|hrs?|hr|h)\b/i
+        );
+
+    if (match) {
+        return Number(match[1]) * 3600;
+    }
+
+    return null;
+}
+
+
+function isTimerCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.includes("timer") ||
+        t.includes("set a timer") ||
+        t.includes("set timer") ||
+        t.includes("countdown") ||
+        t.includes("టైమర్")
+    );
+}
+
+
+function setJarvisTimer(text) {
+
+    const seconds =
+        extractTimerSeconds(text);
+
+    if (!seconds || seconds <= 0) {
+
+        return (
+            "Please specify the timer duration, " +
+            "for example: set timer for 30 seconds."
+        );
+    }
+
+    if (currentTimer) {
+        clearTimeout(currentTimer);
+    }
+
+    currentTimer =
+        setTimeout(() => {
+
+            reply(
+                "Timer finished.",
+                true
+            );
+
+            currentTimer = null;
+
+        }, seconds * 1000);
+
+    return (
+        `Timer set for ${seconds} second` +
+        (seconds === 1 ? "" : "s") +
+        "."
+    );
+}
+
+
+/* =========================================================
+   DICE / COIN
+   ========================================================= */
+
+function diceCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    if (
+        t.includes("coin") ||
+        t.includes("toss")
+    ) {
+
+        const result =
+            Math.random() < 0.5
+                ? "Heads"
+                : "Tails";
+
+        return `Coin toss result: ${result}.`;
+    }
+
+    const sidesMatch =
+        t.match(
+            /(?:d|dice)\s*(\d+)/i
+        );
+
+    const sides =
+        sidesMatch
+            ? Math.max(
+                2,
+                Number(sidesMatch[1])
+              )
+            : 6;
+
+    const result =
+        Math.floor(
+            Math.random() * sides
+        ) + 1;
+
+    return (
+        `You rolled a ${sides}-sided die. ` +
+        `Result: ${result}.`
+    );
+}
+
+
+function isDiceCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.includes("dice") ||
+        t.includes("roll dice") ||
+        t.includes("roll a die") ||
+        t.includes("coin toss") ||
+        t.includes("toss coin") ||
+        t.includes("flip coin") ||
+        t.includes("coin")
+    );
+}
+
+
+/* =========================================================
+   JOKE
+   ========================================================= */
+
+async function getJoke() {
+
+    try {
+
+        const data =
+            await fetchJSON(
+                JARVIS_CONFIG.JOKE_API,
+                {},
+                7000
+            );
+
+        if (
+            data &&
+            data.setup &&
+            data.punchline
+        ) {
+
+            return (
+                `${data.setup}\n${data.punchline}`
+            );
+        }
+
+    } catch (error) {}
+
+    return (
+        "Why did the computer go to the doctor? " +
+        "Because it had a virus."
+    );
+}
+
+
+function isJokeCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.includes("joke") ||
+        t.includes("tell me a joke") ||
+        t.includes("make me laugh") ||
+        t.includes("జోక్")
+    );
+}
+
+
+/* =========================================================
+   QUOTE
+   ========================================================= */
+
+async function getQuote() {
+
+    try {
+
+        const data =
+            await fetchJSON(
+                JARVIS_CONFIG.QUOTE_API,
+                {},
+                7000
+            );
+
+        if (data?.quote) {
+
+            return (
+                `"${data.quote}" — ${data.author || "Unknown"}`
+            );
+        }
+
+    } catch (error) {}
+
+    return (
+        `"The secret of getting ahead is getting started."`
+    );
+}
+
+
+function isQuoteCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.includes("quote") ||
+        t.includes("motivation") ||
+        t.includes("motivational") ||
+        t.includes("inspire me") ||
+        t.includes("మోటివేషన్") ||
+        t.includes("కోట")
+    );
+}
+
+
+/* =========================================================
+   TRANSLATION
+   ========================================================= */
+
+function extractTranslation(text) {
+
+    let match =
+        text.match(
+            /translate\s+(.+?)\s+(?:to|into)\s+([a-zA-Z-]+)$/i
+        );
 
     if (match) {
 
-      sides =
-        Math.max(
-          2,
-          Math.min(
-            1000,
-            Number(match[1])
-          )
-        );
+        return {
+            phrase: match[1].trim(),
+            language: match[2].trim()
+        };
     }
 
-    const result =
-      Math.floor(
-        Math.random() * sides
-      ) + 1;
-
-    return (
-      "Dice result: " +
-      result +
-      " out of " +
-      sides +
-      "."
-    );
-  }
-
-  /* =========================================================
-     05. JOKE
-     ========================================================= */
-
-  async function getJoke() {
-
-    try {
-
-      const data =
-        await fetchJSON(
-          "https://v2.jokeapi.dev/joke/Any?safe-mode",
-          {},
-          10000
+    match =
+        text.match(
+            /(.+?)\s+(?:to|into)\s+([a-zA-Z-]+)$/i
         );
-
-      if (data.type === "single") {
-        return data.joke;
-      }
-
-      if (
-        data.setup &&
-        data.delivery
-      ) {
-
-        return (
-          data.setup +
-          " " +
-          data.delivery
-        );
-      }
-
-    } catch {}
-
-    return (
-      "Why did the computer get cold? " +
-      "Because it left its Windows open."
-    );
-  }
-
-  /* =========================================================
-     06. QUOTE
-     ========================================================= */
-
-  async function getQuote() {
-
-    try {
-
-      const data =
-        await fetchJSON(
-          "https://dummyjson.com/quotes/random",
-          {},
-          10000
-        );
-
-      if (data.quote) {
-
-        return (
-          "\"" +
-          data.quote +
-          "\" — " +
-          (
-            data.author ||
-            "Unknown"
-          )
-        );
-      }
-
-    } catch {}
-
-    return (
-      "Success is built from small steps taken consistently."
-    );
-  }
-
-  /* =========================================================
-     07. NEWS
-     ========================================================= */
-
-  async function getNews() {
-
-    try {
-
-      const rss =
-        "https://news.google.com/rss" +
-        "?hl=en-IN&gl=IN&ceid=IN:en";
-
-      const url =
-        "https://api.rss2json.com/v1/api.json" +
-        "?rss_url=" +
-        encodeURIComponent(rss);
-
-      const data =
-        await fetchJSON(
-          url,
-          {},
-          15000
-        );
-
-      const items =
-        Array.isArray(data.items)
-          ? data.items.slice(0, 5)
-          : [];
-
-      if (!items.length) {
-        throw new Error("No news");
-      }
-
-      const headlines =
-        items
-          .map(
-            (item, i) =>
-              (i + 1) +
-              ". " +
-              clean(item.title)
-          )
-          .join("\n");
-
-      return (
-        "Latest headlines:\n" +
-        headlines
-      );
-
-    } catch {
-
-      return (
-        "Live news is temporarily unavailable. " +
-        "Please try again."
-      );
-    }
-  }
-
-  /* =========================================================
-     08. TRANSLATE
-     ========================================================= */
-
-  async function translateText(text) {
-
-    let query =
-      clean(text)
-        .replace(
-          /^translate\s*/i,
-          ""
-        )
-        .replace(
-          /^translation\s*/i,
-          ""
-        )
-        .trim();
-
-    let target = "te";
 
     if (
-      /\bto\s+english\b/i.test(query)
+        match &&
+        (
+            normalizeText(text).includes("translate")
+        )
     ) {
 
-      target = "en";
-
-      query =
-        query
-          .replace(
-            /\bto\s+english\b/i,
-            ""
-          )
-          .trim();
+        return {
+            phrase: match[1].trim(),
+            language: match[2].trim()
+        };
     }
 
-    if (
-      /\bto\s+telugu\b/i.test(query)
-    ) {
+    return null;
+}
 
-      target = "te";
 
-      query =
-        query
-          .replace(
-            /\bto\s+telugu\b/i,
-            ""
-          )
-          .trim();
-    }
+const languageCodes = {
 
-    if (!query) {
+    english: "en",
+    hindi: "hi",
+    telugu: "te",
+    tamil: "ta",
+    kannada: "kn",
+    malayalam: "ml",
+    marathi: "mr",
+    bengali: "bn",
+    gujarati: "gu",
+    punjabi: "pa",
+    french: "fr",
+    german: "de",
+    spanish: "es",
+    italian: "it",
+    portuguese: "pt",
+    russian: "ru",
+    japanese: "ja",
+    korean: "ko",
+    chinese: "zh"
+};
 
-      return (
-        "Tell me what you want to translate."
-      );
-    }
 
-    try {
+async function translateText(text) {
 
-      const url =
-        "https://api.mymemory.translated.net/get" +
-        "?q=" +
-        encodeURIComponent(query) +
-        "&langpair=auto|" +
-        target;
+    const info =
+        extractTranslation(text);
 
-      const data =
-        await fetchJSON(
-          url,
-          {},
-          15000
-        );
-
-      const result =
-        data?.responseData?.translatedText;
-
-      if (result) {
+    if (!info) {
 
         return (
-          "Translation: " +
-          result
+            "Use translation like: " +
+            "translate hello to Telugu."
         );
-      }
-
-    } catch {}
-
-    return (
-      "Translation service is temporarily unavailable."
-    );
-  }
-
-  /* =========================================================
-     09. CURRENCY
-     ========================================================= */
-
-  async function currency(text) {
-
-    const match =
-      clean(text).match(
-        /(\d+(?:\.\d+)?)\s*([A-Za-z]{3})\s*(?:to|into|in)\s*([A-Za-z]{3})/i
-      );
-
-    if (!match) {
-
-      return (
-        "Use this format: 100 USD to INR."
-      );
     }
 
-    const amount =
-      Number(match[1]);
-
-    const from =
-      match[2].toUpperCase();
-
-    const to =
-      match[3].toUpperCase();
+    const target =
+        languageCodes[
+            normalizeText(info.language)
+        ] || info.language;
 
     try {
 
-      const data =
-        await fetchJSON(
-          "https://open.er-api.com/v6/latest/" +
-          encodeURIComponent(from),
-          {},
-          12000
+        const url =
+            `${JARVIS_CONFIG.TRANSLATE_API}` +
+            `?q=${encodeURIComponent(info.phrase)}` +
+            `&langpair=en|${encodeURIComponent(target)}`;
+
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                8000
+            );
+
+        const result =
+            data?.responseData?.translatedText;
+
+        if (result) {
+
+            return (
+                `Translation: ${result}`
+            );
+        }
+
+    } catch (error) {}
+
+    return (
+        "Translation service is temporarily unavailable."
+    );
+}
+
+
+function isTranslateCommand(text) {
+
+    return normalizeText(text)
+        .includes("translate");
+}
+/* =========================================================
+   J.A.R.V.I.S
+   PART 2
+   ========================================================= */
+
+
+/* =========================================================
+   CURRENCY
+   ========================================================= */
+
+const currencyNames = {
+
+    usd: "USD",
+    dollar: "USD",
+    dollars: "USD",
+
+    inr: "INR",
+    rupee: "INR",
+    rupees: "INR",
+
+    eur: "EUR",
+    euro: "EUR",
+
+    gbp: "GBP",
+    pound: "GBP",
+
+    jpy: "JPY",
+    yen: "JPY",
+
+    aud: "AUD",
+    cad: "CAD",
+    aed: "AED",
+    sar: "SAR",
+    cny: "CNY"
+};
+
+
+function findCurrencyCode(value) {
+
+    const clean =
+        normalizeText(value);
+
+    return (
+        currencyNames[clean] ||
+        clean.toUpperCase()
+    );
+}
+
+
+function extractCurrency(text) {
+
+    const t =
+        normalizeText(text);
+
+    let match =
+        t.match(
+            /(\d+(?:\.\d+)?)\s*([a-z]{3}|dollars?|rupees?|euros?|pounds?)\s+(?:to|in)\s+([a-z]{3}|dollars?|rupees?|euros?|pounds?)/i
         );
 
-      const rate =
-        data?.rates?.[to];
+    if (match) {
 
-      if (
-        typeof rate !== "number"
-      ) {
-        throw new Error("No rate");
-      }
-
-      const result =
-        amount * rate;
-
-      return (
-        amount +
-        " " +
-        from +
-        " = " +
-        result.toFixed(2) +
-        " " +
-        to +
-        " at the current available exchange rate."
-      );
-
-    } catch {
-
-      return (
-        "I could not retrieve the live exchange rate right now."
-      );
+        return {
+            amount: Number(match[1]),
+            from: findCurrencyCode(match[2]),
+            to: findCurrencyCode(match[3])
+        };
     }
-  }
 
-  /* =========================================================
-     10. MEANING
-     ========================================================= */
-
-  async function meaning(text) {
-
-    let word =
-      clean(text)
-        .replace(
-          /^what\s+is\s+the\s+meaning\s+of\s*/i,
-          ""
-        )
-        .replace(
-          /^meaning\s+of\s*/i,
-          ""
-        )
-        .replace(
-          /^define\s+/i,
-          ""
-        )
-        .replace(
-          /^dictionary\s+/i,
-          ""
-        )
-        .trim();
-
-    word =
-      word
-        .split(/\s+/)[0]
-        .replace(
-          /[^a-zA-Z'-]/g,
-          ""
+    match =
+        t.match(
+            /([a-z]{3}|dollars?|rupees?|euros?|pounds?)\s*(\d+(?:\.\d+)?)\s+(?:to|in)\s+([a-z]{3}|dollars?|rupees?|euros?|pounds?)/i
         );
+
+    if (match) {
+
+        return {
+            amount: Number(match[2]),
+            from: findCurrencyCode(match[1]),
+            to: findCurrencyCode(match[3])
+        };
+    }
+
+    return null;
+}
+
+
+async function convertCurrency(text) {
+
+    const info =
+        extractCurrency(text);
+
+    if (!info) {
+
+        return (
+            "Use currency like: " +
+            "100 USD to INR."
+        );
+    }
+
+    if (info.from === info.to) {
+
+        return (
+            `${info.amount} ${info.from} = ` +
+            `${info.amount} ${info.to}.`
+        );
+    }
+
+    try {
+
+        const url =
+            `${JARVIS_CONFIG.CURRENCY_API}` +
+            encodeURIComponent(info.from);
+
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                8000
+            );
+
+        const rate =
+            data?.rates?.[info.to];
+
+        if (!rate) {
+            throw new Error("Rate unavailable");
+        }
+
+        const result =
+            info.amount * rate;
+
+        return (
+            `${info.amount} ${info.from} = ` +
+            `${result.toFixed(2)} ${info.to}.`
+        );
+
+    } catch (error) {
+
+        return (
+            "I couldn't get the live exchange rate right now."
+        );
+    }
+}
+
+
+function isCurrencyCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.includes("currency") ||
+        t.includes("convert") &&
+        (
+            t.includes("usd") ||
+            t.includes("inr") ||
+            t.includes("eur") ||
+            t.includes("gbp") ||
+            t.includes("rupee") ||
+            t.includes("dollar")
+        )
+    );
+}
+
+
+/* =========================================================
+   MEANING / DICTIONARY
+   ========================================================= */
+
+function extractWord(text) {
+
+    const t =
+        String(text || "").trim();
+
+    let match =
+        t.match(
+            /(?:meaning of|define|definition of|meaning)\s+(.+)$/i
+        );
+
+    if (match) {
+        return match[1].trim();
+    }
+
+    return null;
+}
+
+
+async function getMeaning(text) {
+
+    const word =
+        extractWord(text);
 
     if (!word) {
 
-      return (
-        "Tell me the word you want the meaning of."
-      );
+        return (
+            "Please ask like: meaning of intelligent."
+        );
     }
 
     try {
 
-      const data =
-        await fetchJSON(
-          "https://api.dictionaryapi.dev/api/v2/entries/en/" +
-          encodeURIComponent(word),
-          {},
-          10000
-        );
+        const url =
+            JARVIS_CONFIG.DICTIONARY_API +
+            encodeURIComponent(word);
 
-      const m =
-        data?.[0]?.meanings?.[0];
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                7000
+            );
 
-      const definition =
-        m?.definitions?.[0]?.definition;
+        const entry =
+            data?.[0];
 
-      const example =
-        m?.definitions?.[0]?.example;
+        const definition =
+            entry?.meanings?.[0]
+                ?.definitions?.[0]
+                ?.definition;
 
-      const part =
-        m?.partOfSpeech;
+        if (definition) {
 
-      if (definition) {
+            return (
+                `${word}: ${definition}`
+            );
+        }
 
-        return (
-          word +
-          (part ? " (" + part + ")" : "") +
-          " means: " +
-          definition +
-          (
-            example
-              ? " Example: " + example
-              : ""
-          )
-        );
-      }
-
-    } catch {}
+    } catch (error) {}
 
     return (
-      "I could not find a dictionary definition for " +
-      word +
-      "."
+        `I couldn't find a dictionary definition for "${word}".`
     );
-  }
-    /* =========================================================
-     11. PASSWORD
-     ========================================================= */
+}
 
-  function generatePassword(text) {
 
-    const match =
-      clean(text).match(
-        /\b(\d{1,2})\b/
-      );
+function isMeaningCommand(text) {
 
-    const length =
-      Math.max(
-        8,
+    const t =
+        normalizeText(text);
+
+    return (
+        t.startsWith("meaning of ") ||
+        t.startsWith("define ") ||
+        t.startsWith("definition of ") ||
+        t.startsWith("meaning ")
+    );
+}
+
+
+/* =========================================================
+   PASSWORD
+   ========================================================= */
+
+function generatePassword(length = 16) {
+
+    length =
         Math.min(
-          64,
-          Number(match?.[1] || 16)
-        )
-      );
+            Math.max(
+                Number(length) || 16,
+                8
+            ),
+            64
+        );
 
-    const upper =
-      "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const chars =
+        "ABCDEFGHJKLMNPQRSTUVWXYZ" +
+        "abcdefghijkmnopqrstuvwxyz" +
+        "23456789!@#$%^&*_-+=";
 
-    const lowerChars =
-      "abcdefghijkmnopqrstuvwxyz";
+    const values =
+        new Uint32Array(length);
 
-    const numbers =
-      "23456789";
-
-    const symbols =
-      "!@#$%^&*_-+=";
-
-    const all =
-      upper +
-      lowerChars +
-      numbers +
-      symbols;
+    crypto.getRandomValues(values);
 
     let password = "";
 
-    if (
-      window.crypto &&
-      window.crypto.getRandomValues
-    ) {
-
-      const values =
-        new Uint32Array(length);
-
-      window.crypto.getRandomValues(
-        values
-      );
-
-      for (
-        let i = 0;
-        i < length;
-        i++
-      ) {
+    for (let i = 0; i < length; i++) {
 
         password +=
-          all[
-            values[i] % all.length
-          ];
-      }
-
-    } else {
-
-      for (
-        let i = 0;
-        i < length;
-        i++
-      ) {
-
-        password +=
-          all[
-            Math.floor(
-              Math.random() * all.length
-            )
-          ];
-      }
+            chars[
+                values[i] % chars.length
+            ];
     }
 
+    return password;
+}
+
+
+function passwordCommand(text) {
+
+    const match =
+        String(text || "")
+            .match(/\b(\d{1,2})\b/);
+
+    const length =
+        match
+            ? Number(match[1])
+            : 16;
+
+    const password =
+        generatePassword(length);
+
     return (
-      "Generated secure password: " +
-      password
+        `Generated password:\n${password}`
     );
-  }
+}
 
-  /* =========================================================
-     12. SEARCH
-     ========================================================= */
 
-  function webSearch(text) {
+function isPasswordCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.includes("password") ||
+        t.includes("generate password") ||
+        t.includes("strong password") ||
+        t.includes("పాస్వర్డ్")
+    );
+}
+
+
+/* =========================================================
+   SEARCH
+   ========================================================= */
+
+function searchCommand(text) {
 
     let query =
-      clean(text)
-        .replace(
-          /^search\s+for\s+/i,
-          ""
-        )
-        .replace(
-          /^search\s+/i,
-          ""
-        )
-        .replace(
-          /^google\s+/i,
-          ""
-        )
-        .replace(
-          /^look\s+up\s+/i,
-          ""
-        )
-        .trim();
+        String(text || "")
+            .replace(
+                /^(search|google|look up|find)\s*/i,
+                ""
+            )
+            .trim();
 
     if (!query) {
 
-      return (
-        "Tell me what you want to search for."
-      );
+        return (
+            "Tell me what you want me to search for."
+        );
     }
 
     const url =
-      "https://www.google.com/search?q=" +
-      encodeURIComponent(query);
+        "https://www.google.com/search?q=" +
+        encodeURIComponent(query);
 
     window.open(
-      url,
-      "_blank",
-      "noopener,noreferrer"
+        url,
+        "_blank",
+        "noopener,noreferrer"
     );
 
     return (
-      "Searching Google for: " +
-      query
+        `Searching Google for "${query}".`
     );
-  }
+}
 
-  /* =========================================================
-     13. OPEN APPS
-     ========================================================= */
 
-  function openApp(text) {
+function isSearchCommand(text) {
 
     const t =
-      lower(text);
+        normalizeText(text);
+
+    return (
+        t.startsWith("search ") ||
+        t.startsWith("google ") ||
+        t.startsWith("look up ") ||
+        t.startsWith("find ")
+    );
+}
+
+
+/* =========================================================
+   OPEN APPS
+   ========================================================= */
+
+function openApp(text) {
+
+    const t =
+        normalizeText(text);
 
     const apps = {
 
-      youtube:
-        "https://www.youtube.com/",
+        youtube:
+            "https://www.youtube.com/",
 
-      google:
-        "https://www.google.com/",
+        google:
+            "https://www.google.com/",
 
-      gmail:
-        "https://mail.google.com/",
+        gmail:
+            "https://mail.google.com/",
 
-      whatsapp:
-        "https://web.whatsapp.com/",
+        whatsapp:
+            "https://web.whatsapp.com/",
 
-      instagram:
-        "https://www.instagram.com/",
+        facebook:
+            "https://www.facebook.com/",
 
-      facebook:
-        "https://www.facebook.com/",
+        instagram:
+            "https://www.instagram.com/",
 
-      maps:
-        "https://maps.google.com/",
+        github:
+            "https://github.com/",
 
-      spotify:
-        "https://open.spotify.com/",
+        maps:
+            "https://maps.google.com/",
 
-      calculator:
-        "https://www.google.com/search?q=calculator",
+        googlemaps:
+            "https://maps.google.com/",
 
-      calendar:
-        "https://calendar.google.com/",
+        spotify:
+            "https://open.spotify.com/",
 
-      drive:
-        "https://drive.google.com/",
+        twitter:
+            "https://x.com/",
 
-      chatgpt:
-        "https://chatgpt.com/"
+        x:
+            "https://x.com/"
     };
 
-    for (
-      const name in apps
-    ) {
+    let selected = null;
 
-      if (
-        t.includes(name)
-      ) {
+    for (const name in apps) {
 
-        window.open(
-          apps[name],
-          "_blank",
-          "noopener,noreferrer"
-        );
-
-        return (
-          "Opening " +
-          name +
-          ", Boss."
-        );
-      }
+        if (t.includes(name)) {
+            selected = name;
+            break;
+        }
     }
 
-    return (
-      "Tell me which app you want to open."
-    );
-  }
+    if (!selected) {
 
-  /* =========================================================
-     14. PLAY SONGS
-     ========================================================= */
-
-  function playSong(text) {
-
-    let query =
-      clean(text)
-        .replace(
-          /^please\s+/i,
-          ""
-        )
-        .replace(
-          /^play\s+/i,
-          ""
-        )
-        .replace(
-          /^song\s+/i,
-          ""
-        )
-        .replace(
-          /^music\s+/i,
-          ""
-        )
-        .trim();
-
-    if (!query) {
-
-      window.open(
-        "https://www.youtube.com/",
-        "_blank",
-        "noopener,noreferrer"
-      );
-
-      return (
-        "Opening YouTube."
-      );
+        return (
+            "Available apps: YouTube, Google, Gmail, " +
+            "WhatsApp, Facebook, Instagram, GitHub, " +
+            "Maps and Spotify."
+        );
     }
 
     window.open(
-      "https://www.youtube.com/results?search_query=" +
-      encodeURIComponent(query),
-      "_blank",
-      "noopener,noreferrer"
+        apps[selected],
+        "_blank",
+        "noopener,noreferrer"
     );
 
     return (
-      "Searching YouTube for: " +
-      query
+        `Opening ${selected}.`
     );
-  }
+}
 
-  /* =========================================================
-     15. CRYPTO
-     ========================================================= */
 
-  async function cryptoPrice(text) {
+function isOpenAppCommand(text) {
 
     const t =
-      lower(text);
+        normalizeText(text);
 
-    const coins = {
+    return (
+        t.includes("open youtube") ||
+        t.includes("open google") ||
+        t.includes("open gmail") ||
+        t.includes("open whatsapp") ||
+        t.includes("open facebook") ||
+        t.includes("open instagram") ||
+        t.includes("open github") ||
+        t.includes("open maps") ||
+        t.includes("open spotify") ||
+        t.includes("open app")
+    );
+}
 
-      bitcoin: "bitcoin",
-      btc: "bitcoin",
 
-      ethereum: "ethereum",
-      eth: "ethereum",
+/* =========================================================
+   PLAY SONGS
+   ========================================================= */
 
-      dogecoin: "dogecoin",
-      doge: "dogecoin",
+function playSong(text) {
 
-      solana: "solana",
-      sol: "solana",
+    let query =
+        String(text || "")
+            .replace(
+                /^(play|play song|play music)\s*/i,
+                ""
+            )
+            .trim();
 
-      ripple: "ripple",
-      xrp: "ripple",
-
-      cardano: "cardano",
-      ada: "cardano"
-    };
-
-    let coin = "bitcoin";
-
-    for (
-      const key in coins
-    ) {
-
-      if (
-        t.includes(key)
-      ) {
-
-        coin =
-          coins[key];
-
-        break;
-      }
+    if (!query) {
+        query = "trending music";
     }
+
+    const url =
+        "https://www.youtube.com/results?search_query=" +
+        encodeURIComponent(query);
+
+    window.open(
+        url,
+        "_blank",
+        "noopener,noreferrer"
+    );
+
+    return (
+        `Opening YouTube results for ${query}.`
+    );
+}
+
+
+function isPlaySongCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t.startsWith("play ") ||
+        t.includes("play song") ||
+        t.includes("play music") ||
+        t.includes("పాట ప్లే") ||
+        t.includes("సాంగ్ ప్లే")
+    );
+}
+
+
+/* =========================================================
+   CRYPTO
+   ========================================================= */
+
+const cryptoIds = {
+
+    bitcoin: "bitcoin",
+    btc: "bitcoin",
+
+    ethereum: "ethereum",
+    eth: "ethereum",
+
+    solana: "solana",
+    sol: "solana",
+
+    dogecoin: "dogecoin",
+    doge: "dogecoin",
+
+    ripple: "ripple",
+    xrp: "ripple",
+
+    cardano: "cardano",
+    ada: "cardano"
+};
+
+
+function findCrypto(text) {
+
+    const t =
+        normalizeText(text);
+
+    for (const name in cryptoIds) {
+
+        if (t.includes(name)) {
+            return cryptoIds[name];
+        }
+    }
+
+    return "bitcoin";
+}
+
+
+async function getCrypto(text) {
+
+    const id =
+        findCrypto(text);
 
     try {
 
-      const data =
-        await fetchJSON(
-          "https://api.coingecko.com/api/v3/simple/price" +
-          "?ids=" +
-          encodeURIComponent(coin) +
-          "&vs_currencies=usd,inr" +
-          "&include_24hr_change=true",
-          {},
-          15000
+        const url =
+            `${JARVIS_CONFIG.CRYPTO_API}` +
+            `?ids=${encodeURIComponent(id)}` +
+            `&vs_currencies=usd,inr`;
+
+        const data =
+            await fetchJSON(
+                url,
+                {},
+                8000
+            );
+
+        const coin =
+            data?.[id];
+
+        if (!coin) {
+            throw new Error("Crypto unavailable");
+        }
+
+        return (
+            `${id} price: ` +
+            `$${Number(coin.usd).toLocaleString()} ` +
+            `or ₹${Number(coin.inr).toLocaleString()}.`
         );
 
-      const item =
-        data?.[coin];
+    } catch (error) {
 
-      if (!item) {
-        throw new Error("No data");
-      }
-
-      let answer =
-        coin.toUpperCase() +
-        " current price: $" +
-        Number(
-          item.usd
-        ).toLocaleString();
-
-      if (
-        typeof item.inr === "number"
-      ) {
-
-        answer +=
-          " | ₹" +
-          Number(
-            item.inr
-          ).toLocaleString();
-      }
-
-      if (
-        typeof item.usd_24h_change ===
-        "number"
-      ) {
-
-        answer +=
-          " | 24h change: " +
-          item.usd_24h_change.toFixed(2) +
-          "%";
-      }
-
-      return answer + ".";
-
-    } catch {
-
-      return (
-        "Live cryptocurrency data is temporarily unavailable."
-      );
+        return (
+            "I couldn't fetch the live crypto price right now."
+        );
     }
-  }
+}
 
-  /* =========================================================
-     EXACT TOOL ROUTER
-     ========================================================= */
 
-  async function runTool(text) {
+function isCryptoCommand(text) {
 
     const t =
-      lower(text);
+        normalizeText(text);
+
+    return (
+        t.includes("crypto") ||
+        t.includes("bitcoin") ||
+        t.includes("btc") ||
+        t.includes("ethereum") ||
+        t.includes("eth") ||
+        t.includes("solana") ||
+        t.includes("dogecoin") ||
+        t.includes("doge")
+    );
+}
+
+
+/* =========================================================
+   NEWS
+   ========================================================= */
+
+async function getNews() {
+
+    try {
+
+        const data =
+            await fetchJSON(
+                JARVIS_CONFIG.NEWS_API,
+                {},
+                9000
+            );
+
+        const articles =
+            Array.isArray(data?.items)
+                ? data.items.slice(0, 5)
+                : [];
+
+        if (!articles.length) {
+            throw new Error("No news");
+        }
+
+        const lines =
+            articles.map(
+                (item, index) =>
+                    `${index + 1}. ${item.title}`
+            );
+
+        return (
+            "Latest headlines:\n" +
+            lines.join("\n")
+        );
+
+    } catch (error) {
+
+        return (
+            "I couldn't load the latest news right now."
+        );
+    }
+}
+
+
+function isNewsCommand(text) {
+
+    const t =
+        normalizeText(text);
+
+    return (
+        t === "news" ||
+        t.includes("latest news") ||
+        t.includes("headlines") ||
+        t.includes("today news") ||
+        t.includes("న్యూస్")
+    );
+}
+
+
+/* =========================================================
+   YOUTUBE DIRECT SEARCH
+   ========================================================= */
+
+function youtubeCommand(text) {
+
+    const query =
+        String(text || "")
+            .replace(
+                /^(youtube|play on youtube)\s*/i,
+                ""
+            )
+            .trim();
+
+    if (!query) {
+
+        window.open(
+            "https://www.youtube.com/",
+            "_blank"
+        );
+
+        return "Opening YouTube.";
+    }
+
+    const url =
+        "https://www.youtube.com/results?search_query=" +
+        encodeURIComponent(query);
+
+    window.open(
+        url,
+        "_blank",
+        "noopener,noreferrer"
+    );
+
+    return (
+        `Searching YouTube for ${query}.`
+    );
+}
+
+
+/* =========================================================
+   COMMAND ROUTER
+   ========================================================= */
+
+async function handleTools(text) {
+
+    const t =
+        normalizeText(text);
 
     /* TIME */
+    if (isTimeCommand(t)) {
 
-    if (
-      t === "time" ||
-      t.includes("what time") ||
-      t.includes("current time") ||
-      t.includes("tell me the time") ||
-      t.includes("సమయం") ||
-      t.includes("టైమ్")
-    ) {
-      return getTime();
+        if (!liveTimeSynced) {
+            await syncLiveTime();
+        }
+
+        return await getTime();
     }
 
 
     /* WEATHER */
-
     if (
-      t.includes("weather") ||
-      t.includes("temperature") ||
-      t.includes("forecast") ||
-      t.includes("వాతావరణం") ||
-      t.includes("వెదర్")
+        t === "weather" ||
+        t.includes("weather") ||
+        t.includes("temperature") ||
+        t.includes("వెదర్") ||
+        t.includes("వాతావరణం")
     ) {
-      return await getWeather();
+
+        return await getWeather();
     }
 
 
     /* TIMER */
+    if (isTimerCommand(t)) {
 
-    if (
-      t.includes("timer") ||
-      t.includes("set timer") ||
-      t.includes("టైమర్")
-    ) {
-      return createTimer(text);
+        return setJarvisTimer(t);
     }
 
 
     /* DICE / COIN */
+    if (isDiceCommand(t)) {
 
-    if (
-      t.includes("dice") ||
-      t.includes("roll") ||
-      t.includes("coin") ||
-      t.includes("flip coin") ||
-      t.includes("toss coin") ||
-      t.includes("డైస్") ||
-      t.includes("కాయిన్")
-    ) {
-      return diceCoin(text);
+        return diceCommand(t);
     }
 
 
     /* JOKE */
+    if (isJokeCommand(t)) {
 
-    if (
-      t === "joke" ||
-      t.includes("tell me a joke") ||
-      t.includes("tell joke") ||
-      t.includes("joke please") ||
-      t.includes("జోక్")
-    ) {
-      return await getJoke();
+        return await getJoke();
     }
 
 
     /* QUOTE */
+    if (isQuoteCommand(t)) {
 
-    if (
-      t === "quote" ||
-      t.includes("give me a quote") ||
-      t.includes("motivational quote") ||
-      t.includes("motivation") ||
-      t.includes("inspiration") ||
-      t.includes("కోట్")
-    ) {
-      return await getQuote();
+        return await getQuote();
     }
 
 
     /* NEWS */
+    if (isNewsCommand(t)) {
 
-    if (
-      t === "news" ||
-      t.includes("latest news") ||
-      t.includes("today news") ||
-      t.includes("latest headlines") ||
-      t.includes("headlines") ||
-      t.includes("వార్తలు")
-    ) {
-      return await getNews();
+        return await getNews();
     }
 
 
     /* TRANSLATE */
+    if (isTranslateCommand(t)) {
 
-    if (
-      t.startsWith("translate ") ||
-      t.startsWith("translation ") ||
-      t.includes("translate this") ||
-      t.includes("translate to english") ||
-      t.includes("translate to telugu") ||
-      t.includes("అనువదించ")
-    ) {
-      return await translateText(text);
+        return await translateText(text);
     }
 
 
     /* CURRENCY */
+    if (isCurrencyCommand(t)) {
 
-    if (
-      t.includes("currency") ||
-      t.includes("exchange rate") ||
-      t.includes("convert currency") ||
-      /\d+(?:\.\d+)?\s*[a-z]{3}\s+(?:to|into|in)\s*[a-z]{3}/i.test(text)
-    ) {
-      return await currency(text);
+        return await convertCurrency(text);
     }
 
 
     /* MEANING */
+    if (isMeaningCommand(t)) {
 
-    if (
-      t.includes("meaning of") ||
-      t.includes("what is the meaning") ||
-      t.includes("define ") ||
-      t.includes("definition of") ||
-      t.includes("dictionary") ||
-      t.includes("అర్థం")
-    ) {
-      return await meaning(text);
+        return await getMeaning(text);
     }
 
 
     /* PASSWORD */
+    if (isPasswordCommand(t)) {
 
-    if (
-      t.includes("password") ||
-      t.includes("generate password") ||
-      t.includes("strong password") ||
-      t.includes("create password") ||
-      t.includes("పాస్‌వర్డ్")
-    ) {
-      return generatePassword(text);
+        return passwordCommand(text);
     }
 
 
-    /* SEARCH */
+    /* OPEN APPS */
+    if (isOpenAppCommand(t)) {
 
-    if (
-      t === "search" ||
-      t.startsWith("search ") ||
-      t.startsWith("google ") ||
-      t.startsWith("look up ") ||
-      t.startsWith("వెతుకు ")
-    ) {
-      return webSearch(text);
-    }
-
-
-    /* OPEN APP */
-
-    if (
-      t.startsWith("open ") ||
-      t.includes("open youtube") ||
-      t.includes("open google") ||
-      t.includes("open gmail") ||
-      t.includes("open whatsapp") ||
-      t.includes("open instagram") ||
-      t.includes("open facebook") ||
-      t.includes("open maps") ||
-      t.includes("open spotify") ||
-      t.includes("open calculator") ||
-      t.includes("open calendar") ||
-      t.includes("open drive") ||
-      t.includes("open chatgpt")
-    ) {
-      return openApp(text);
+        return openApp(text);
     }
 
 
     /* PLAY SONG */
+    if (isPlaySongCommand(t)) {
 
-    if (
-      t.startsWith("play ") ||
-      t.includes("play song") ||
-      t.includes("play music") ||
-      t.includes("youtube") ||
-      t.includes("పాట")
-    ) {
-      return playSong(text);
+        return playSong(text);
     }
 
 
     /* CRYPTO */
+    if (isCryptoCommand(t)) {
 
+        return await getCrypto(text);
+    }
+
+
+    /* SEARCH */
+    if (isSearchCommand(t)) {
+
+        return searchCommand(text);
+    }
+
+
+    /* YOUTUBE */
     if (
-      t.includes("crypto") ||
-      t.includes("bitcoin") ||
-      t.includes("btc") ||
-      t.includes("ethereum") ||
-      t.includes("eth") ||
-      t.includes("dogecoin") ||
-      t.includes("doge") ||
-      t.includes("solana") ||
-      t.includes("ripple") ||
-      t.includes("xrp") ||
-      t.includes("cardano") ||
-      t.includes("ada") ||
-      t.includes("క్రిప్టో")
+        t.startsWith("youtube ") ||
+        t === "youtube"
     ) {
-      return await cryptoPrice(text);
+
+        return youtubeCommand(text);
     }
 
 
     return null;
-  }
+}
 
-  /* =========================================================
-     AI FALLBACK
-     ========================================================= */
 
-  async function aiFallback(text) {
+/* =========================================================
+   GENERAL COMMANDS
+   ========================================================= */
 
-    const memory =
-      getMemory();
+function handleBasicCommand(text) {
 
-    const prompt =
-      "You are J.A.R.V.I.S., a personal AI assistant. " +
-      "Give a direct, accurate and concise answer. " +
-      "Do not claim to have performed actions that you did not perform. " +
-      "User question: " +
-      text +
-      "\nPrevious response: " +
-      (memory.lastResponse || "None");
-
-    try {
-
-      const response =
-        await fetch(
-          "https://text.pollinations.ai/",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json"
-            },
-            body:
-              JSON.stringify({
-                messages: [
-                  {
-                    role: "user",
-                    content: prompt
-                  }
-                ]
-              })
-          }
-        );
-
-      if (!response.ok) {
-        throw new Error("AI unavailable");
-      }
-
-      const type =
-        response.headers.get(
-          "content-type"
-        ) || "";
-
-      if (
-        type.includes("application/json")
-      ) {
-
-        const data =
-          await response.json();
-
-        const answer =
-          data?.choices?.[0]
-            ?.message?.content ||
-          data?.response ||
-          data?.text;
-
-        if (answer) {
-          return clean(answer);
-        }
-
-      } else {
-
-        const answer =
-          await response.text();
-
-        if (clean(answer)) {
-          return clean(answer);
-        }
-      }
-
-    } catch (e) {
-
-      console.warn(
-        "AI fallback unavailable:",
-        e
-      );
-    }
-
-    return (
-      "I can handle your J.A.R.V.I.S. tools. " +
-      "For a general question, please try again."
-    );
-  }
-
-  /* =========================================================
-     IMAGE ANALYSIS
-     ========================================================= */
-
-  async function analyzeImage(file) {
-
-    if (!file) {
-      throw new Error(
-        "No image selected."
-      );
-    }
+    const t =
+        normalizeText(text);
 
     if (
-      !file.type.startsWith("image/")
+        t === "hello" ||
+        t === "hi" ||
+        t === "hey" ||
+        t.includes("hello jarvis") ||
+        t.includes("hi jarvis")
     ) {
-      throw new Error(
-        "Please select an image file."
-      );
+
+        return (
+            "Hello. J.A.R.V.I.S is online and ready."
+        );
     }
 
-    const dataURL =
-      await new Promise(
-        (resolve, reject) => {
 
-          const reader =
-            new FileReader();
+    if (
+        t.includes("who are you") ||
+        t.includes("what are you")
+    ) {
 
-          reader.onload =
-            () => resolve(
-              reader.result
-            );
+        return (
+            "I am J.A.R.V.I.S, your personal AI assistant."
+        );
+    }
 
-          reader.onerror =
-            () => reject(
-              new Error(
-                "Could not read image."
-              )
-            );
 
-          reader.readAsDataURL(file);
-        }
-      );
+    if (
+        t === "thank you" ||
+        t === "thanks" ||
+        t.includes("thank you jarvis")
+    ) {
 
-    const dimensions =
-      await new Promise(
-        (resolve, reject) => {
+        return (
+            "You're welcome."
+        );
+    }
 
-          const image =
-            new Image();
 
-          image.onload =
-            () => resolve({
-              width:
-                image.naturalWidth,
-              height:
-                image.naturalHeight
-            });
+    if (
+        t === "clear" ||
+        t === "clear chat"
+    ) {
 
-          image.onerror =
-            () => reject(
-              new Error(
-                "Invalid image."
-              )
-            );
+        clearMemory();
 
-          image.src =
-            dataURL;
-        }
-      );
+        return (
+            "Chat memory cleared."
+        );
+    }
 
-    let detectedText = "";
+
+    return null;
+}
+
+
+/* =========================================================
+   LOCAL MEMORY
+   ========================================================= */
+
+function loadMemory() {
 
     try {
-
-      const form =
-        new FormData();
-
-      form.append(
-        "apikey",
-        "helloworld"
-      );
-
-      form.append(
-        "language",
-        "eng"
-      );
-
-      form.append(
-        "isOverlayRequired",
-        "false"
-      );
-
-      form.append(
-        "base64Image",
-        dataURL
-      );
-
-      const response =
-        await fetch(
-          "https://api.ocr.space/parse/image",
-          {
-            method: "POST",
-            body: form
-          }
-        );
-
-      if (response.ok) {
 
         const data =
-          await response.json();
-
-        detectedText =
-          clean(
-            (data.ParsedResults || [])
-              .map(
-                x =>
-                  x.ParsedText || ""
-              )
-              .join(" ")
-          );
-      }
-
-    } catch (e) {
-
-      console.warn(
-        "OCR unavailable:",
-        e
-      );
-    }
-
-    let result =
-      "Image analysis complete. " +
-      "Resolution: " +
-      dimensions.width +
-      " × " +
-      dimensions.height +
-      ".";
-
-    if (detectedText) {
-
-      result +=
-        "\nDetected text: " +
-        detectedText.substring(
-          0,
-          2000
-        );
-
-    } else {
-
-      result +=
-        "\nNo readable text was detected.";
-    }
-
-    return result;
-  }
-
-  /* =========================================================
-     IMAGE BUTTON
-     ========================================================= */
-
-  if (camBtn && imgInput) {
-
-    camBtn.addEventListener(
-      "click",
-      event => {
-
-        event.preventDefault();
-
-        imgInput.click();
-      }
-    );
-  }
-
-  if (imgInput) {
-
-    imgInput.addEventListener(
-      "change",
-      async () => {
-
-        const file =
-          imgInput.files?.[0];
-
-        if (!file) return;
-
-        userMessage(
-          "Analyze image: " +
-          file.name
-        );
-
-        try {
-
-          const result =
-            await analyzeImage(file);
-
-          reply(result);
-
-        } catch (e) {
-
-          reply(
-            e.message ||
-            "Image analysis failed."
-          );
-        }
-
-        imgInput.value = "";
-      }
-    );
-  }
-
-  /* =========================================================
-     VOICE INPUT
-     ========================================================= */
-
-  function setupVoice() {
-
-    if (!micBtn) return;
-
-    const SpeechRecognition =
-      window.SpeechRecognition ||
-      window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-
-      micBtn.addEventListener(
-        "click",
-        () => {
-
-          reply(
-            "Voice input is not supported in this browser."
-          );
-        }
-      );
-
-      return;
-    }
-
-    recognition =
-      new SpeechRecognition();
-
-    recognition.lang =
-      "en-IN";
-
-    recognition.continuous =
-      false;
-
-    recognition.interimResults =
-      false;
-
-    recognition.maxAlternatives =
-      1;
-
-    recognition.onstart =
-      () => {
-
-        listening = true;
-
-        micBtn.classList.add(
-          "listening"
-        );
-
-        micBtn.setAttribute(
-          "aria-label",
-          "Stop voice input"
-        );
-      };
-
-    recognition.onresult =
-      event => {
-
-        const transcript =
-          event.results?.[0]?.[0]
-            ?.transcript;
-
-        if (!transcript) return;
-
-        msg.value =
-          clean(transcript);
-
-        setTimeout(
-          runCommand,
-          50
-        );
-      };
-
-    recognition.onerror =
-      event => {
-
-        listening = false;
-
-        micBtn.classList.remove(
-          "listening"
-        );
-
-        if (
-          event.error ===
-          "not-allowed"
-        ) {
-
-          reply(
-            "Microphone permission was denied. Please allow microphone access."
-          );
-        }
-      };
-
-    recognition.onend =
-      () => {
-
-        listening = false;
-
-        micBtn.classList.remove(
-          "listening"
-        );
-
-        micBtn.setAttribute(
-          "aria-label",
-          "Activate voice input"
-        );
-      };
-
-    micBtn.addEventListener(
-      "click",
-      event => {
-
-        event.preventDefault();
-
-        try {
-
-          if (listening) {
-            recognition.stop();
-          } else {
-            recognition.start();
-          }
-
-        } catch (e) {
-          console.warn(
-            "Recognition error:",
-            e
-          );
-        }
-      }
-    );
-  }
-
-  /* =========================================================
-     MAIN EXECUTION
-     ========================================================= */
-
-  async function runCommand() {
-
-    if (busy) return;
-
-    const text =
-      clean(msg.value);
-
-    if (!text) return;
-
-    userMessage(text);
-
-    msg.value = "";
-
-    busy = true;
-
-    send.disabled = true;
-    send.textContent = "WAIT...";
-
-    try {
-
-      /*
-       * IMPORTANT:
-       * Screenshot features are handled FIRST.
-       * Therefore they do not get random AI answers.
-       */
-
-      const toolAnswer =
-        await runTool(text);
-
-      if (
-        toolAnswer !== null &&
-        toolAnswer !== undefined
-      ) {
-
-        reply(toolAnswer);
-
-        return;
-      }
-
-      /*
-       * Only unknown/general questions reach AI.
-       */
-
-      const answer =
-        await aiFallback(text);
-
-      reply(answer);
+            localStorage.getItem(
+                JARVIS_CONFIG.STORAGE_KEY
+            );
+
+        return data
+            ? JSON.parse(data)
+            : [];
 
     } catch (error) {
 
-      console.error(
-        "JARVIS error:",
-        error
-      );
+        return [];
+    }
+}
 
-      reply(
-        "Sorry Boss, I could not complete that command."
-      );
+
+function saveMemory(memory) {
+
+    try {
+
+        localStorage.setItem(
+            JARVIS_CONFIG.STORAGE_KEY,
+            JSON.stringify(memory.slice(-50))
+        );
+
+    } catch (error) {}
+}
+
+
+function rememberConversation(
+    user,
+    assistant
+) {
+
+    const memory =
+        loadMemory();
+
+    memory.push({
+        user,
+        assistant,
+        time: new Date().toISOString()
+    });
+
+    saveMemory(memory);
+}
+
+
+function clearMemory() {
+
+    try {
+
+        localStorage.removeItem(
+            JARVIS_CONFIG.STORAGE_KEY
+        );
+
+    } catch (error) {}
+
+    if (chat) {
+        chat.innerHTML = "";
+    }
+
+    reply(
+        "Memory and chat cleared.",
+        false
+    );
+}
+
+
+/* =========================================================
+   OPTIONAL AI FALLBACK
+   ========================================================= */
+
+async function aiFallback(text) {
+
+    /*
+       This is only used when the command is not one
+       of the 15 built-in tools.
+
+       Built-in tools are handled first, so they remain fast.
+    */
+
+    try {
+
+        const prompt =
+            `You are J.A.R.V.I.S, a concise personal AI assistant.
+Answer accurately and naturally.
+User: ${text}`;
+
+        const url =
+            "https://text.pollinations.ai/" +
+            encodeURIComponent(prompt);
+
+        const response =
+            await fetch(
+                url,
+                {
+                    method: "GET",
+                    cache: "no-store"
+                }
+            );
+
+        if (!response.ok) {
+            throw new Error("AI unavailable");
+        }
+
+        const answer =
+            await response.text();
+
+        if (answer?.trim()) {
+            return answer.trim();
+        }
+
+    } catch (error) {
+
+        console.warn(
+            "AI fallback unavailable:",
+            error
+        );
+    }
+
+    return (
+        "I didn't understand that command. " +
+        "Try Time, Weather, Timer, Dice, Joke, Quote, " +
+        "News, Translate, Currency, Meaning, Password, " +
+        "Search, Open Apps, Play Songs, or Crypto."
+    );
+}
+
+
+/* =========================================================
+   MAIN EXECUTION
+   ========================================================= */
+
+let commandBusy = false;
+
+
+async function executeCommand(text) {
+
+    const command =
+        String(text || "").trim();
+
+    if (!command) {
+        return;
+    }
+
+    if (commandBusy) {
+        return;
+    }
+
+    commandBusy = true;
+
+    userMessage(command);
+
+    try {
+
+        /*
+           First check local/basic commands.
+        */
+
+        const basic =
+            handleBasicCommand(command);
+
+        if (basic) {
+
+            reply(basic);
+
+            rememberConversation(
+                command,
+                basic
+            );
+
+            return;
+        }
+
+
+        /*
+           Then check all screenshot tools.
+        */
+
+        const toolResult =
+            await handleTools(command);
+
+        if (toolResult) {
+
+            reply(toolResult);
+
+            rememberConversation(
+                command,
+                toolResult
+            );
+
+            return;
+        }
+
+
+        /*
+           Finally AI fallback.
+        */
+
+        const aiAnswer =
+            await aiFallback(command);
+
+        reply(aiAnswer);
+
+        rememberConversation(
+            command,
+            aiAnswer
+        );
+
+    } catch (error) {
+
+        console.error(
+            "JARVIS command error:",
+            error
+        );
+
+        reply(
+            "Sorry, something went wrong while processing that command."
+        );
 
     } finally {
 
-      busy = false;
-
-      send.disabled = false;
-      send.textContent = "EXECUTE";
-
-      try {
-        msg.focus();
-      } catch {}
+        commandBusy = false;
     }
-  }
+}
 
-  /* =========================================================
-     EXECUTE BUTTON
-     ========================================================= */
 
-  send.addEventListener(
-    "click",
-    event => {
+/* =========================================================
+   SEND BUTTON
+   ========================================================= */
 
-      event.preventDefault();
+if (sendBtn) {
 
-      runCommand();
-    }
-  );
+    sendBtn.addEventListener(
+        "click",
+        async () => {
 
-  /* =========================================================
-     ENTER KEY
-     ========================================================= */
+            const text =
+                msg?.value?.trim();
 
-  msg.addEventListener(
-    "keydown",
-    event => {
-
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey
-      ) {
-
-        event.preventDefault();
-
-        runCommand();
-      }
-    }
-  );
-
-  /* =========================================================
-     CLEAR MEMORY
-     ========================================================= */
-
-  if (clearBtn) {
-
-    clearBtn.addEventListener(
-      "click",
-      event => {
-
-        event.preventDefault();
-
-        clearMemory();
-      }
-    );
-  }
-
-  /* =========================================================
-     FEATURE CARDS
-     ========================================================= */
-
-  function setupFeatureCards() {
-
-    const commands = {
-
-      "time":
-        "what is the time",
-
-      "weather":
-        "weather",
-
-      "timer":
-        "timer 10 seconds",
-
-      "dice / coin":
-        "roll dice",
-
-      "dice":
-        "roll dice",
-
-      "coin":
-        "flip coin",
-
-      "joke":
-        "tell me a joke",
-
-      "quote":
-        "give me a quote",
-
-      "news":
-        "latest news",
-
-      "translate":
-        "translate hello",
-
-      "currency":
-        "100 USD to INR",
-
-      "meaning":
-        "meaning of assistant",
-
-      "password":
-        "generate password",
-
-      "search":
-        "search Google",
-
-      "open apps":
-        "open Google",
-
-      "play songs":
-        "play music",
-
-      "crypto":
-        "bitcoin price"
-    };
-
-    const elements =
-      document.querySelectorAll(
-        "body *"
-      );
-
-    elements.forEach(
-      element => {
-
-        if (
-          element.children.length > 0
-        ) {
-          return;
-        }
-
-        const label =
-          lower(
-            element.textContent
-          );
-
-        if (!commands[label]) {
-          return;
-        }
-
-        element.style.cursor =
-          "pointer";
-
-        element.addEventListener(
-          "click",
-          event => {
-
-            /*
-             * Do not interfere with normal
-             * buttons/input controls.
-             */
-
-            if (
-              event.target.closest(
-                "button,input"
-              )
-            ) {
-              return;
+            if (!text) {
+                return;
             }
 
-            msg.value =
-              commands[label];
+            msg.value = "";
 
-            runCommand();
-          }
-        );
-      }
+            await executeCommand(text);
+        }
     );
-  }
+}
 
-  /* =========================================================
-     STARTUP
-     ========================================================= */
 
-  setupVoice();
+/* =========================================================
+   ENTER KEY
+   ========================================================= */
 
-  setupFeatureCards();
+if (msg) {
 
-  window.jarvisRun =
-    runCommand;
+    msg.addEventListener(
+        "keydown",
+        async event => {
 
-  window.jarvisSpeak =
-    speak;
+            if (event.key === "Enter") {
 
-  window.jarvisClearMemory =
-    clearMemory;
+                event.preventDefault();
 
-  window.jarvisAnalyzeImage =
-    analyzeImage;
+                const text =
+                    msg.value.trim();
 
-  window.jarvisTool =
-    runTool;
+                if (!text) {
+                    return;
+                }
 
-  console.log(
-    "J.A.R.V.I.S. ONLINE — ALL 15 TOOLS READY"
-  );
+                msg.value = "";
 
-  try {
-    msg.focus();
-  } catch {}
+                await executeCommand(text);
+            }
+        }
+    );
+}
 
-})();
+
+/* =========================================================
+   CLEAR BUTTON
+   ========================================================= */
+
+if (clearBtn) {
+
+    clearBtn.addEventListener(
+        "click",
+        () => {
+
+            try {
+
+                localStorage.removeItem(
+                    JARVIS_CONFIG.STORAGE_KEY
+                );
+
+            } catch (error) {}
+
+            if (chat) {
+                chat.innerHTML = "";
+            }
+
+            reply(
+                "Memory cleared successfully.",
+                false
+            );
+        }
+    );
+}
+
+
+/* =========================================================
+   VOICE RECOGNITION
+   ========================================================= */
+
+function setupVoiceRecognition() {
+
+    const SpeechRecognition =
+        window.SpeechRecognition ||
+        window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+
+        if (micBtn) {
+            micBtn.title =
+                "Voice recognition is not supported in this browser.";
+        }
+
+        return;
+    }
+
+    recognition =
+        new SpeechRecognition();
+
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-IN";
+
+
+    recognition.onstart = () => {
+
+        isListening = true;
+
+        if (micBtn) {
+            micBtn.classList.add(
+                "listening"
+            );
+            micBtn.textContent = "🔴";
+        }
+    };
+
+
+    recognition.onresult = event => {
+
+        const transcript =
+            event.results?.[0]?.[0]?.transcript
+            ?.trim();
+
+        if (!transcript) {
+            return;
+        }
+
+        if (msg) {
+            msg.value = transcript;
+        }
+
+        executeCommand(transcript);
+    };
+
+
+    recognition.onerror = event => {
+
+        console.warn(
+            "Speech recognition error:",
+            event.error
+        );
+    };
+
+
+    recognition.onend = () => {
+
+        isListening = false;
+
+        if (micBtn) {
+
+            micBtn.classList.remove(
+                "listening"
+            );
+
+            micBtn.textContent = "🎙️";
+        }
+    };
+
+
+    if (micBtn) {
+
+        micBtn.addEventListener(
+            "click",
+            () => {
+
+                if (isListening) {
+
+                    recognition.stop();
+
+                } else {
+
+                    try {
+
+                        recognition.start();
+
+                    } catch (error) {
+
+                        console.warn(
+                            "Could not start microphone:",
+                            error
+                        );
+                    }
+                }
+            }
+        );
+    }
+}
+
+
+/* =========================================================
+   CAMERA / IMAGE INPUT
+   ========================================================= */
+
+if (camBtn && imgInput) {
+
+    camBtn.addEventListener(
+        "click",
+        () => {
+
+            imgInput.click();
+        }
+    );
+
+
+    imgInput.addEventListener(
+        "change",
+        async event => {
+
+            const file =
+                event.target.files?.[0];
+
+            if (!file) {
+                return;
+            }
+
+            userMessage(
+                "Analyze this image."
+            );
+
+            jarvisMessage(
+                "Image received. Analyzing..."
+            );
+
+            /*
+               Basic browser-side image information.
+               This works without an external AI key.
+            */
+
+            const image =
+                new Image();
+
+            const objectURL =
+                URL.createObjectURL(file);
+
+            image.onload = () => {
+
+                const result =
+                    `Image loaded successfully. ` +
+                    `Size: ${image.width} × ${image.height}px. ` +
+                    `File type: ${file.type}.`;
+
+                reply(
+                    result,
+                    false
+                );
+
+                URL.revokeObjectURL(
+                    objectURL
+                );
+            };
+
+            image.onerror = () => {
+
+                URL.revokeObjectURL(
+                    objectURL
+                );
+
+                reply(
+                    "I couldn't read that image.",
+                    false
+                );
+            };
+
+            image.src = objectURL;
+
+            imgInput.value = "";
+        }
+    );
+}
+
+
+/* =========================================================
+   FEATURE CARD AUTO CLICK
+   ========================================================= */
+
+function setupFeatureCards() {
+
+    const elements =
+        document.querySelectorAll(
+            "div, article, section, button"
+        );
+
+    elements.forEach(element => {
+
+        /*
+           Only consider relatively small elements
+           containing one of the feature names.
+        */
+
+        const text =
+            normalizeText(
+                element.textContent
+            );
+
+        if (
+            !text ||
+            text.length > 180
+        ) {
+            return;
+        }
+
+
+        let command = null;
+
+
+        if (
+            text === "time" ||
+            text.startsWith("time ")
+        ) {
+            command = "time";
+        }
+
+        else if (
+            text === "weather" ||
+            text.startsWith("weather ")
+        ) {
+            command = "weather";
+        }
+
+        else if (
+            text === "timer" ||
+            text.startsWith("timer ")
+        ) {
+            command = "set timer for 10 seconds";
+        }
+
+        else if (
+            text.includes("dice") ||
+            text.includes("coin")
+        ) {
+            command = "roll dice";
+        }
+
+        else if (
+            text === "joke" ||
+            text.startsWith("joke ")
+        ) {
+            command = "tell me a joke";
+        }
+
+        else if (
+            text === "quote" ||
+            text.startsWith("quote ")
+        ) {
+            command = "give me a quote";
+        }
+
+        else if (
+            text === "news" ||
+            text.startsWith("news ")
+        ) {
+            command = "latest news";
+        }
+
+        else if (
+            text === "translate" ||
+            text.startsWith("translate ")
+        ) {
+            command =
+                "translate hello to Telugu";
+        }
+
+        else if (
+            text === "currency" ||
+            text.startsWith("currency ")
+        ) {
+            command =
+                "100 USD to INR";
+        }
+
+        else if (
+            text === "meaning" ||
+            text.startsWith("meaning ")
+        ) {
+            command =
+                "meaning of intelligent";
+        }
+
+        else if (
+            text === "password" ||
+            text.startsWith("password ")
+        ) {
+            command =
+                "generate strong password";
+        }
+
+        else if (
+            text === "search" ||
+            text.startsWith("search ")
+        ) {
+            command =
+                "search Google";
+        }
+
+        else if (
+            text.includes("open apps")
+        ) {
+            command =
+                "open Google";
+        }
+
+        else if (
+            text.includes("play songs") ||
+            text.includes("play song")
+        ) {
+            command =
+                "play trending music";
+        }
+
+        else if (
+            text === "crypto" ||
+            text.startsWith("crypto ")
+        ) {
+            command =
+                "Bitcoin price";
+        }
+
+
+        if (!command) {
+            return;
+        }
+
+
+        /*
+           Avoid adding duplicate listeners.
+        */
+
+        if (
+            element.dataset.jarvisFeatureBound === "1"
+        ) {
+            return;
+        }
+
+        element.dataset.jarvisFeatureBound = "1";
+
+        element.addEventListener(
+            "click",
+            event => {
+
+                /*
+                   Don't interfere with actual buttons
+                   that already have their own handlers.
+                */
+
+                if (
+                    element === sendBtn ||
+                    element === micBtn ||
+                    element === camBtn ||
+                    element === clearBtn
+                ) {
+                    return;
+                }
+
+                executeCommand(command);
+            }
+        );
+    });
+}
+
+
+/* =========================================================
+   STARTUP
+   ========================================================= */
+
+document.addEventListener(
+    "DOMContentLoaded",
+    async () => {
+
+        setupVoiceRecognition();
+
+        setupFeatureCards();
+
+        /*
+           Start live internet clock.
+           This does not block commands.
+        */
+
+        startLiveClock()
+            .catch(error => {
+                console.warn(
+                    "Live clock startup failed:",
+                    error
+                );
+            });
+
+        /*
+           Welcome message only if chat is empty.
+        */
+
+        if (
+            chat &&
+            chat.children.length === 0
+        ) {
+
+            jarvisMessage(
+                "J.A.R.V.I.S online. All systems ready."
+            );
+        }
+    }
+);
+
+
+/* =========================================================
+   GLOBAL FALLBACK
+   ========================================================= */
+
+window.JARVIS = {
+    executeCommand,
+    getTime,
+    getWeather,
+    syncLiveTime,
+    generatePassword,
+    speak
+};
