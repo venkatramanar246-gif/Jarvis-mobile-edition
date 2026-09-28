@@ -1,1760 +1,1799 @@
- /* =========================================================
-   J.A.R.V.I.S. - AI AGENT ENGINE
-   Works with the existing HTML IDs/classes.
+/* =========================================================
+   J.A.R.V.I.S. - FULL WORKING SCRIPT
+   Compatible IDs:
+   chat, msg, mic-btn, clear-btn, cam-btn, img-input
    ========================================================= */
 
 (() => {
   "use strict";
 
-  /* -----------------------------
-     DOM
-  ----------------------------- */
+  /* =========================================================
+     1. CONFIG / API KEY
+     ========================================================= */
 
-  const $ = (id) => document.getElementById(id);
+  let API_KEY = localStorage.getItem("jarvis_key") || "";
 
-  const chat = $("chat");
-  const msg = $("msg");
-  const send = $("send");
-  const micBtn = $("mic-btn");
-  const camBtn = $("cam-btn");
-  const clearBtn = $("clear-btn");
-  const imgInput = $("img-input");
+  const MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash"
+  ];
 
-  if (!chat || !msg || !send) {
-    console.error("JARVIS: Required HTML elements are missing.");
-    return;
-  }
+  function getApiKey() {
+    if (API_KEY && API_KEY.trim()) return API_KEY.trim();
 
-  /* -----------------------------
-     Configuration
-  ----------------------------- */
+    const entered = window.prompt("Enter your Gemini API Key:");
 
-  const CONFIG = {
-    assistantName: "J.A.R.V.I.S.",
-    memoryKey: "jarvis_memory_v1",
-    historyKey: "jarvis_history_v1",
-    maxHistory: 60,
-    maxMemory: 100,
-
-    // Optional AI backend.
-    // Leave empty for browser/local agent mode.
-    AI_API_URL: "",
-
-    // Optional API key if your own backend requires one.
-    // Do NOT put a private OpenAI key directly in public frontend code.
-    AI_API_KEY: ""
-  };
-
-  /* -----------------------------
-     State
-  ----------------------------- */
-
-  const state = {
-    busy: false,
-    listening: false,
-    recognition: null,
-    timer: null,
-    timers: [],
-    memory: loadJSON(CONFIG.memoryKey, []),
-    history: loadJSON(CONFIG.historyKey, []),
-    lastImage: null,
-    commandQueue: [],
-    currentPlan: null
-  };
-
-  /* -----------------------------
-     Utility
-  ----------------------------- */
-
-  function loadJSON(key, fallback) {
-    try {
-      const value = localStorage.getItem(key);
-      return value ? JSON.parse(value) : fallback;
-    } catch {
-      return fallback;
+    if (entered && entered.trim()) {
+      API_KEY = entered.trim();
+      localStorage.setItem("jarvis_key", API_KEY);
+      return API_KEY;
     }
+
+    return "";
   }
 
-  function saveJSON(key, value) {
+  function clearApiKey() {
+    API_KEY = "";
+    localStorage.removeItem("jarvis_key");
+  }
+
+  /* =========================================================
+     2. MEMORY
+     ========================================================= */
+
+  let MEMORY = [];
+
+  const MEMORY_KEY = "jarvis_memory";
+
+  function loadMemory() {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      const stored = JSON.parse(
+        localStorage.getItem(MEMORY_KEY) || "[]"
+      );
+
+      if (!Array.isArray(stored)) {
+        MEMORY = [];
+        return;
+      }
+
+      MEMORY = stored.filter(item => {
+        if (!item) return false;
+
+        if (
+          item.role !== "user" &&
+          item.role !== "model"
+        ) {
+          return false;
+        }
+
+        if (typeof item.text !== "string") {
+          return false;
+        }
+
+        /* Never keep obvious password responses */
+        if (
+          item.role === "model" &&
+          /your\s+(strong\s+)?password\s*:/i.test(item.text)
+        ) {
+          return false;
+        }
+
+        return true;
+      });
+
+      if (MEMORY.length !== stored.length) {
+        saveMemory();
+      }
+
     } catch (error) {
-      console.warn("Storage error:", error);
+      MEMORY = [];
+      localStorage.removeItem(MEMORY_KEY);
     }
   }
 
-  function normalize(text) {
-    return String(text || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, " ");
+  function saveMemory() {
+    try {
+      localStorage.setItem(
+        MEMORY_KEY,
+        JSON.stringify(MEMORY.slice(-100))
+      );
+    } catch (error) {
+      console.warn("Memory save failed:", error);
+    }
   }
 
-  function escapeHTML(text) {
-    return String(text)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
+  function clearMemory() {
+    MEMORY = [];
+
+    try {
+      localStorage.removeItem(MEMORY_KEY);
+    } catch (error) {
+      console.warn(error);
+    }
   }
 
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  loadMemory();
+
+  /* =========================================================
+     3. DOM ELEMENTS
+     ========================================================= */
+
+  const chat = document.getElementById("chat");
+  const input = document.getElementById("msg");
+  const micBtn = document.getElementById("mic-btn");
+  const clearBtn = document.getElementById("clear-btn");
+  const camBtn = document.getElementById("cam-btn");
+  const imgInput = document.getElementById("img-input");
+
+  /*
+    Extra IDs are supported if your HTML has them.
+  */
+
+  const sendBtn =
+    document.getElementById("send-btn") ||
+    document.getElementById("send") ||
+    document.getElementById("sendButton");
+
+  const stopBtn =
+    document.getElementById("stop-btn") ||
+    document.getElementById("stop");
+
+  const speakBtn =
+    document.getElementById("speak-btn") ||
+    document.getElementById("voice-btn");
+
+  /* =========================================================
+     4. CHAT UI
+     ========================================================= */
+
+  function add(message, role = "ai") {
+    const text = String(message ?? "");
+
+    if (!chat) {
+      console.log(
+        role === "user" ? "YOU:" : "J.A.R.V.I.S.:",
+        text
+      );
+      return;
+    }
+
+    const row = document.createElement("div");
+
+    row.className =
+      role === "user"
+        ? "jarvis-message user-message"
+        : "jarvis-message ai-message";
+
+    const prefix =
+      role === "user"
+        ? "YOU: "
+        : "J.A.R.V.I.S.: ";
+
+    row.textContent = prefix + text;
+
+    chat.appendChild(row);
+
+    chat.scrollTop = chat.scrollHeight;
   }
 
-  function now() {
-    return new Date();
+  function addSystem(message) {
+    add(message, "ai");
   }
 
-  function formatTime(date = new Date()) {
-    return date.toLocaleTimeString([], {
+  function renderMemory() {
+    if (!chat) return;
+
+    chat.innerHTML = "";
+
+    MEMORY.forEach(item => {
+      add(
+        item.text,
+        item.role === "user" ? "user" : "ai"
+      );
+    });
+  }
+
+  /* =========================================================
+     5. FETCH HELPER
+     ========================================================= */
+
+  async function fetchToolsJson(
+    url,
+    options = {},
+    timeoutMs = 12000
+  ) {
+    const controller =
+      typeof AbortController === "function"
+        ? new AbortController()
+        : null;
+
+    const timeoutId =
+      controller
+        ? setTimeout(
+            () => controller.abort(),
+            timeoutMs
+          )
+        : null;
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        ...(controller
+          ? { signal: controller.signal }
+          : {})
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}`
+        );
+      }
+
+      return await response.json();
+
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  /* =========================================================
+     6. LIVE TIME
+     ========================================================= */
+
+  function getCurrentTime() {
+    const now = new Date();
+
+    return now.toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit"
     });
   }
 
-  function formatDate(date = new Date()) {
-    return date.toLocaleDateString([], {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric"
-    });
-  }
-
-  function addHistory(role, content) {
-    state.history.push({
-      role,
-      content,
-      time: Date.now()
-    });
-
-    if (state.history.length > CONFIG.maxHistory) {
-      state.history = state.history.slice(-CONFIG.maxHistory);
-    }
-
-    saveJSON(CONFIG.historyKey, state.history);
-  }
-
-  function remember(text, type = "note") {
-    const item = {
-      id: Date.now(),
-      type,
-      text: String(text),
-      time: Date.now()
-    };
-
-    state.memory.push(item);
-
-    if (state.memory.length > CONFIG.maxMemory) {
-      state.memory = state.memory.slice(-CONFIG.maxMemory);
-    }
-
-    saveJSON(CONFIG.memoryKey, state.memory);
-    return item;
-  }
-
-  function speak(text) {
-    if (!("speechSynthesis" in window)) return;
-
-    try {
-      window.speechSynthesis.cancel();
-
-      const utterance = new SpeechSynthesisUtterance(
-        String(text).replace(/[*#`]/g, "")
-      );
-
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-
-      const voices = speechSynthesis.getVoices();
-      const preferred =
-        voices.find(v => /en-IN/i.test(v.lang)) ||
-        voices.find(v => /en-US/i.test(v.lang)) ||
-        voices.find(v => /en/i.test(v.lang));
-
-      if (preferred) utterance.voice = preferred;
-
-      window.speechSynthesis.speak(utterance);
-    } catch (error) {
-      console.warn("Speech error:", error);
-    }
-  }
-
-  function addMessage(text, type = "assistant", options = {}) {
-    const wrapper = document.createElement("div");
-
-    wrapper.className = `jarvis-message ${type}`;
-
-    const time = document.createElement("small");
-    time.className = "jarvis-message-time";
-    time.textContent = options.time || formatTime();
-
-    const body = document.createElement("div");
-    body.className = "jarvis-message-body";
-
-    if (options.html) {
-      body.innerHTML = text;
-    } else {
-      body.textContent = text;
-    }
-
-    wrapper.appendChild(body);
-    wrapper.appendChild(time);
-
-    chat.appendChild(wrapper);
-
-    chat.scrollTop = chat.scrollHeight;
-
-    if (type === "user") {
-      addHistory("user", text);
-    } else if (type === "assistant") {
-      addHistory("assistant", text);
-    }
-
-    return wrapper;
-  }
-
-  function status(text) {
-    const coreText = document.querySelector(".core-text");
-    if (coreText) coreText.textContent = text;
-  }
-
-  function setBusy(value) {
-    state.busy = value;
-
-    if (send) {
-      send.disabled = value;
-      send.textContent = value ? "WORKING..." : "EXECUTE";
-    }
-
-    status(value ? "AGENT WORKING..." : "SYSTEM READY");
-  }
-
-  /* -----------------------------
-     Initialization
-  ----------------------------- */
-
-  function init() {
-    setupRecognition();
-    setupEvents();
-    setupLiveClock();
-    setupDiagnostics();
-    restoreChat();
-
-    setTimeout(() => {
-      if (!state.history.length) {
-        addMessage(
-          "J.A.R.V.I.S. online. Give me a goal or command.",
-          "assistant"
-        );
+  function getCurrentDate() {
+    return new Date().toLocaleDateString(
+      undefined,
+      {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric"
       }
-    }, 150);
-
-    console.log("J.A.R.V.I.S. Agent initialized.");
-  }
-
-  function restoreChat() {
-    const recent = state.history.slice(-20);
-
-    for (const item of recent) {
-      const wrapper = document.createElement("div");
-      wrapper.className = `jarvis-message ${
-        item.role === "user" ? "user" : "assistant"
-      }`;
-
-      const body = document.createElement("div");
-      body.className = "jarvis-message-body";
-      body.textContent = item.content;
-
-      const time = document.createElement("small");
-      time.className = "jarvis-message-time";
-      time.textContent = new Date(item.time).toLocaleTimeString();
-
-      wrapper.appendChild(body);
-      wrapper.appendChild(time);
-      chat.appendChild(wrapper);
-    }
-
-    chat.scrollTop = chat.scrollHeight;
-  }
-
-  /* -----------------------------
-     Events
-  ----------------------------- */
-
-  function setupEvents() {
-    send.addEventListener("click", executeInput);
-
-    msg.addEventListener("keydown", event => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        executeInput();
-      }
-    });
-
-    if (micBtn) {
-      micBtn.addEventListener("click", toggleVoiceInput);
-    }
-
-    if (camBtn) {
-      camBtn.addEventListener("click", () => {
-        if (imgInput) imgInput.click();
-      });
-    }
-
-    if (imgInput) {
-      imgInput.addEventListener("change", handleImage);
-    }
-
-    if (clearBtn) {
-      clearBtn.addEventListener("click", clearMemory);
-    }
-  }
-
-  /* -----------------------------
-     Live Clock
-  ----------------------------- */
-
-  function setupLiveClock() {
-    setInterval(() => {
-      const el = document.querySelector(".core-text");
-
-      if (!el || state.busy) return;
-
-      // Keep system status instead of overwriting it.
-      // Current live time is available through the time tool.
-    }, 1000);
-  }
-
-  /* -----------------------------
-     Diagnostics
-  ----------------------------- */
-
-  function setupDiagnostics() {
-    const rows = document.querySelectorAll(".status .row");
-
-    rows.forEach(row => {
-      const label = normalize(row.querySelector("span")?.textContent);
-
-      const indicator = row.querySelector("b");
-
-      if (!indicator) return;
-
-      if (
-        label.includes("ai engine") ||
-        label.includes("connection") ||
-        label.includes("voice interface") ||
-        label.includes("long-term memory")
-      ) {
-        indicator.classList.add("on");
-      }
-    });
-  }
-
-  /* -----------------------------
-     Main Execute
-  ----------------------------- */
-
-  async function executeInput() {
-    if (state.busy) return;
-
-    const input = msg.value.trim();
-
-    if (!input) return;
-
-    msg.value = "";
-
-    addMessage(input, "user");
-
-    setBusy(true);
-
-    try {
-      const result = await runAgent(input);
-
-      if (result !== undefined && result !== null && result !== "") {
-        addMessage(result, "assistant");
-
-        if (result.length < 500) {
-          speak(result);
-        }
-      }
-    } catch (error) {
-      console.error(error);
-
-      addMessage(
-        "I encountered an error while executing that goal. Please try again.",
-        "assistant"
-      );
-    } finally {
-      setBusy(false);
-      msg.focus();
-    }
-  }
-
-  /* =========================================================
-     AGENT
-     ========================================================= */
-
-  async function runAgent(goal) {
-    const cleanGoal = goal.trim();
-
-    // First try an explicitly recognized multi-step goal.
-    const plan = createPlan(cleanGoal);
-
-    state.currentPlan = plan;
-
-    if (plan && plan.steps.length) {
-      return await executePlan(plan);
-    }
-
-    // Optional external AI backend.
-    if (CONFIG.AI_API_URL) {
-      const aiResult = await callAIBackend(cleanGoal);
-
-      if (aiResult) return aiResult;
-    }
-
-    // General local chat fallback.
-    return await localAssistant(cleanGoal);
-  }
-
-  /* -----------------------------
-     Planner
-  ----------------------------- */
-
-  function createPlan(goal) {
-    const text = normalize(goal);
-
-    const steps = [];
-
-    // "Tell me time and weather"
-    if (
-      (text.includes("time") || text.includes("clock")) &&
-      (
-        text.includes("weather") ||
-        text.includes("temperature")
-      )
-    ) {
-      steps.push({
-        tool: "time",
-        args: {}
-      });
-
-      steps.push({
-        tool: "weather",
-        args: extractLocation(goal)
-      });
-
-      return {
-        goal,
-        steps,
-        mode: "multi"
-      };
-    }
-
-    // "Search X and open it"
-    if (
-      (text.includes("search") || text.includes("find")) &&
-      (
-        text.includes("open") ||
-        text.includes("website")
-      )
-    ) {
-      const query = extractAfterKeywords(
-        goal,
-        ["search", "find", "look up"]
-      );
-
-      if (query) {
-        steps.push({
-          tool: "search",
-          args: { query }
-        });
-
-        return {
-          goal,
-          steps,
-          mode: "multi"
-        };
-      }
-    }
-
-    // "Remember X"
-    if (
-      text.startsWith("remember ") ||
-      text.startsWith("memorize ") ||
-      text.includes("remember that ")
-    ) {
-      steps.push({
-        tool: "memory_save",
-        args: { text: goal }
-      });
-
-      return {
-        goal,
-        steps,
-        mode: "single"
-      };
-    }
-
-    // Explicit tool command.
-    const directTool = detectTool(text);
-
-    if (directTool) {
-      steps.push({
-        tool: directTool,
-        args: extractToolArgs(directTool, goal)
-      });
-
-      return {
-        goal,
-        steps,
-        mode: "single"
-      };
-    }
-
-    return null;
-  }
-
-  function detectTool(text) {
-    if (
-      text === "time" ||
-      text.includes("what time") ||
-      text.includes("current time") ||
-      text.includes("live time") ||
-      text.includes("clock")
-    ) {
-      return "time";
-    }
-
-    if (
-      text.includes("weather") ||
-      text.includes("temperature")
-    ) {
-      return "weather";
-    }
-
-    if (
-      text.includes("timer") ||
-      text.includes("countdown")
-    ) {
-      return "timer";
-    }
-
-    if (
-      text.includes("roll dice") ||
-      text.includes("dice") ||
-      text.includes("coin")
-    ) {
-      return "dice";
-    }
-
-    if (
-      text.includes("joke") ||
-      text.includes("make me laugh")
-    ) {
-      return "joke";
-    }
-
-    if (
-      text.includes("quote") ||
-      text.includes("motivation")
-    ) {
-      return "quote";
-    }
-
-    if (
-      text.includes("news") ||
-      text.includes("headlines")
-    ) {
-      return "news";
-    }
-
-    if (
-      text.includes("translate") ||
-      text.includes("translation")
-    ) {
-      return "translate";
-    }
-
-    if (
-      text.includes("currency") ||
-      text.includes("exchange rate") ||
-      text.includes("convert")
-    ) {
-      return "currency";
-    }
-
-    if (
-      text.includes("meaning of") ||
-      text.includes("define ") ||
-      text.includes("definition")
-    ) {
-      return "meaning";
-    }
-
-    if (
-      text.includes("password") ||
-      text.includes("generate password")
-    ) {
-      return "password";
-    }
-
-    if (
-      text.startsWith("search ") ||
-      text.includes("search for ")
-    ) {
-      return "search";
-    }
-
-    if (
-      text.startsWith("open ") ||
-      text.includes("open youtube") ||
-      text.includes("open google") ||
-      text.includes("open gmail")
-    ) {
-      return "open";
-    }
-
-    if (
-      text.includes("play song") ||
-      text.includes("play music") ||
-      text.startsWith("play ")
-    ) {
-      return "play";
-    }
-
-    if (
-      text.includes("crypto") ||
-      text.includes("bitcoin") ||
-      text.includes("ethereum")
-    ) {
-      return "crypto";
-    }
-
-    if (
-      text.includes("clear memory") ||
-      text.includes("forget everything") ||
-      text.includes("delete memory")
-    ) {
-      return "memory_clear";
-    }
-
-    return null;
-  }
-
-  function extractToolArgs(tool, goal) {
-    switch (tool) {
-      case "weather":
-        return extractLocation(goal);
-
-      case "timer":
-        return {
-          seconds: parseDuration(goal)
-        };
-
-      case "translate":
-        return extractTranslation(goal);
-
-      case "currency":
-        return extractCurrency(goal);
-
-      case "meaning":
-        return {
-          word: extractMeaningWord(goal)
-        };
-
-      case "password":
-        return {
-          length: extractNumber(goal) || 16
-        };
-
-      case "search":
-        return {
-          query: extractAfterKeywords(
-            goal,
-            ["search", "search for", "find", "look up"]
-          )
-        };
-
-      case "open":
-        return {
-          target: goal.replace(/^.*?\bopen\b/i, "").trim()
-        };
-
-      case "play":
-        return {
-          query: goal
-            .replace(/^.*?\bplay\b/i, "")
-            .replace(/\bmusic\b/i, "")
-            .replace(/\bsong\b/i, "")
-            .trim()
-        };
-
-      case "crypto":
-        return {
-          coin: detectCoin(goal)
-        };
-
-      default:
-        return {};
-    }
-  }
-
-  /* -----------------------------
-     Plan Execution
-  ----------------------------- */
-
-  async function executePlan(plan) {
-    const results = [];
-
-    for (let i = 0; i < plan.steps.length; i++) {
-      const step = plan.steps[i];
-
-      status(
-        `EXECUTING ${i + 1}/${plan.steps.length}: ${step.tool.toUpperCase()}`
-      );
-
-      try {
-        const result = await executeTool(
-          step.tool,
-          step.args || {}
-        );
-
-        results.push({
-          tool: step.tool,
-          result
-        });
-      } catch (error) {
-        results.push({
-          tool: step.tool,
-          result: `Tool failed: ${error.message}`
-        });
-      }
-
-      await sleep(80);
-    }
-
-    status("SYSTEM READY");
-
-    return formatPlanResult(plan, results);
-  }
-
-  function formatPlanResult(plan, results) {
-    if (results.length === 1) {
-      return results[0].result;
-    }
-
-    return results
-      .map((item, index) => {
-        return `${index + 1}. ${item.result}`;
-      })
-      .join("\n");
-  }
-
-  /* -----------------------------
-     Tool Router
-  ----------------------------- */
-
-  async function executeTool(tool, args) {
-    switch (tool) {
-      case "time":
-        return toolTime();
-
-      case "weather":
-        return await toolWeather(args);
-
-      case "timer":
-        return toolTimer(args);
-
-      case "dice":
-        return toolDice(args);
-
-      case "joke":
-        return await toolJoke();
-
-      case "quote":
-        return await toolQuote();
-
-      case "news":
-        return await toolNews();
-
-      case "translate":
-        return await toolTranslate(args);
-
-      case "currency":
-        return await toolCurrency(args);
-
-      case "meaning":
-        return await toolMeaning(args);
-
-      case "password":
-        return toolPassword(args);
-
-      case "search":
-        return toolSearch(args);
-
-      case "open":
-        return toolOpen(args);
-
-      case "play":
-        return toolPlay(args);
-
-      case "crypto":
-        return await toolCrypto(args);
-
-      case "memory_save":
-        return toolMemorySave(args);
-
-      case "memory_clear":
-        return toolMemoryClear();
-
-      default:
-        return "I don't have a tool for that command yet.";
-    }
-  }
-
-  /* -----------------------------
-     TIME TOOL
-  ----------------------------- */
-
-  function toolTime() {
-    const d = new Date();
-
-    return (
-      `Current local time: ${formatTime(d)}\n` +
-      `Date: ${formatDate(d)}`
     );
   }
 
-  /* -----------------------------
-     TIMER TOOL
-  ----------------------------- */
+  function updateLiveTime() {
+    const timeText = getCurrentTime();
 
-  function toolTimer(args) {
-    let seconds = Number(args.seconds);
+    const elements = [
+      document.getElementById("live-time"),
+      document.getElementById("time"),
+      document.getElementById("clock"),
+      document.querySelector("[data-live-time]")
+    ];
 
-    if (!Number.isFinite(seconds) || seconds <= 0) {
-      seconds = 60;
+    elements.forEach(element => {
+      if (element) {
+        element.textContent = timeText;
+      }
+    });
+  }
+
+  updateLiveTime();
+  setInterval(updateLiveTime, 1000);
+
+  /* =========================================================
+     7. TIMER
+     ========================================================= */
+
+  let activeTimer = null;
+
+  function parseTimer(text) {
+    const value = String(text || "")
+      .toLowerCase()
+      .replace(/,/g, "");
+
+    let match =
+      value.match(
+        /(?:timer|alarm|remind me in|countdown).*?(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b/
+      );
+
+    if (match) {
+      return Number(match[1]);
     }
 
-    seconds = Math.min(seconds, 86400);
+    match =
+      value.match(
+        /(?:timer|alarm|remind me in).*?(\d+(?:\.\d+)?)\s*(minutes?|mins?|m)\b/
+      );
 
-    const timerId = Date.now();
+    if (match) {
+      return Number(match[1]) * 60;
+    }
 
-    const timer = {
-      id: timerId,
-      remaining: Math.floor(seconds),
-      started: Date.now()
-    };
+    match =
+      value.match(
+        /(?:timer|alarm|remind me in).*?(\d+(?:\.\d+)?)\s*(hours?|hrs?|h)\b/
+      );
 
-    state.timers.push(timer);
+    if (match) {
+      return Number(match[1]) * 3600;
+    }
 
-    const interval = setInterval(() => {
-      timer.remaining--;
+    return null;
+  }
 
-      if (timer.remaining <= 0) {
-        clearInterval(interval);
+  function startTimer(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return "Tell me the timer duration, Boss.";
+    }
 
-        state.timers = state.timers.filter(
-          t => t.id !== timerId
-        );
+    if (activeTimer) {
+      clearTimeout(activeTimer);
+      activeTimer = null;
+    }
 
-        notifyUser("J.A.R.V.I.S. Timer", "Timer finished.");
+    const totalSeconds = Math.round(seconds);
 
-        addMessage(
-          "⏰ Timer finished.",
-          "assistant"
-        );
+    activeTimer = setTimeout(() => {
+      activeTimer = null;
 
-        speak("Timer finished.");
+      addSystem("⏰ Timer finished, Boss.");
+
+      try {
+        if ("speechSynthesis" in window) {
+          const speech = new SpeechSynthesisUtterance(
+            "Boss, your timer is finished."
+          );
+          speechSynthesis.speak(speech);
+        }
+      } catch (error) {
+        console.warn(error);
       }
-    }, 1000);
 
-    const readable = formatDuration(seconds);
+      try {
+        if (
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          new Notification(
+            "J.A.R.V.I.S. Timer",
+            {
+              body: "Your timer is finished."
+            }
+          );
+        }
+      } catch (error) {
+        console.warn(error);
+      }
+    }, totalSeconds * 1000);
 
-    return `Timer started for ${readable}.`;
+    return `Timer started for ${formatDuration(
+      totalSeconds
+    )}, Boss.`;
   }
 
   function formatDuration(seconds) {
-    seconds = Math.max(0, Math.floor(seconds));
+    const s = Math.max(0, Math.round(seconds));
 
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
 
     const parts = [];
 
-    if (h) parts.push(`${h} hour${h !== 1 ? "s" : ""}`);
-    if (m) parts.push(`${m} minute${m !== 1 ? "s" : ""}`);
-    if (s || !parts.length) {
-      parts.push(`${s} second${s !== 1 ? "s" : ""}`);
+    if (hours) {
+      parts.push(
+        `${hours} hour${hours === 1 ? "" : "s"}`
+      );
+    }
+
+    if (minutes) {
+      parts.push(
+        `${minutes} minute${minutes === 1 ? "" : "s"}`
+      );
+    }
+
+    if (secs || parts.length === 0) {
+      parts.push(
+        `${secs} second${secs === 1 ? "" : "s"}`
+      );
     }
 
     return parts.join(" ");
   }
 
-  /* -----------------------------
-     DICE / COIN
-  ----------------------------- */
-
-  function toolDice(args) {
-    const text = normalize(args.text || "");
-
-    if (text.includes("coin")) {
-      return Math.random() < 0.5
-        ? "🪙 Coin flip: HEADS"
-        : "🪙 Coin flip: TAILS";
-    }
-
-    const roll = Math.floor(Math.random() * 6) + 1;
-
-    return `🎲 Dice roll: ${roll}`;
-  }
-
-  /* -----------------------------
-     MEMORY
-  ----------------------------- */
-
-  function toolMemorySave(args) {
-    const original = String(args.text || "").trim();
-
-    const cleaned = original
-      .replace(/^remember that/i, "")
-      .replace(/^remember/i, "")
-      .replace(/^memorize/i, "")
-      .trim();
-
-    if (!cleaned) {
-      return "Tell me what you want me to remember.";
-    }
-
-    remember(cleaned, "user-note");
-
-    return `Memory saved: ${cleaned}`;
-  }
-
-  function toolMemoryClear() {
-    state.memory = [];
-    saveJSON(CONFIG.memoryKey, []);
-
-    return "Long-term memory has been cleared.";
-  }
-
-  function clearMemory() {
-    const confirmed = window.confirm(
-      "Clear J.A.R.V.I.S. long-term memory?"
-    );
-
-    if (!confirmed) return;
-
-    const result = toolMemoryClear();
-
-    addMessage(result, "assistant");
-    speak(result);
-  }
-
-  /* -----------------------------
-     SEARCH
-  ----------------------------- */
-
-  function toolSearch(args) {
-    const query = String(args.query || "").trim();
-
-    if (!query) {
-      return "Tell me what you want me to search for.";
-    }
-
-    const url =
-      "https://www.google.com/search?q=" +
-      encodeURIComponent(query);
-
-    window.open(url, "_blank", "noopener,noreferrer");
-
-    return `Searching Google for: ${query}`;
-  }
-
-  /* -----------------------------
-     OPEN
-  ----------------------------- */
-
-  function toolOpen(args) {
-    const target = normalize(args.target);
-
-    const sites = {
-      google: "https://www.google.com",
-      youtube: "https://www.youtube.com",
-      gmail: "https://mail.google.com",
-      maps: "https://maps.google.com",
-      github: "https://github.com",
-      facebook: "https://www.facebook.com",
-      instagram: "https://www.instagram.com",
-      whatsapp: "https://web.whatsapp.com",
-      wikipedia: "https://www.wikipedia.org",
-      chatgpt: "https://chatgpt.com"
-    };
-
-    let url = sites[target];
-
-    if (!url) {
-      const match = Object.keys(sites).find(
-        key => target.includes(key)
-      );
-
-      if (match) {
-        url = sites[match];
-      }
-    }
-
-    if (!url) {
-      if (/^https?:\/\//i.test(target)) {
-        url = target;
-      } else if (
-        /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(target)
-      ) {
-        url = "https://" + target;
-      }
-    }
-
-    if (!url) {
-      return `I couldn't identify the website "${target}".`;
-    }
-
-    window.open(url, "_blank", "noopener,noreferrer");
-
-    return `Opening ${target}.`;
-  }
-
-  /* -----------------------------
-     PLAY MUSIC
-  ----------------------------- */
-
-  function toolPlay(args) {
-    const query = String(args.query || "").trim();
-
-    if (!query) {
-      return "Tell me the song or artist you want to play.";
-    }
-
-    const url =
-      "https://www.youtube.com/results?search_query=" +
-      encodeURIComponent(query);
-
-    window.open(url, "_blank", "noopener,noreferrer");
-
-    return `Opening YouTube results for "${query}".`;
-  }
-
-  /* -----------------------------
-     PASSWORD
-  ----------------------------- */
-
-  function toolPassword(args) {
-    let length = Number(args.length) || 16;
-
-    length = Math.max(8, Math.min(length, 128));
-
-    const chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-      "abcdefghijklmnopqrstuvwxyz" +
-      "0123456789" +
-      "!@#$%^&*()-_=+[]{};:,.?";
-
-    const values = new Uint32Array(length);
-
-    if (window.crypto?.getRandomValues) {
-      window.crypto.getRandomValues(values);
-    } else {
-      for (let i = 0; i < values.length; i++) {
-        values[i] = Math.floor(Math.random() * 4294967295);
-      }
-    }
-
-    let password = "";
-
-    for (const value of values) {
-      password += chars[value % chars.length];
-    }
-
-    return `Generated password:\n${password}`;
-  }
-
-  /* -----------------------------
-     NOTIFICATIONS
-  ----------------------------- */
-
-  function notifyUser(title, body) {
-    if (!("Notification" in window)) return;
-
-    if (Notification.permission === "granted") {
-      new Notification(title, { body });
-      return;
-    }
-
-    if (Notification.permission !== "denied") {
-      Notification.requestPermission().then(permission => {
-        if (permission === "granted") {
-          new Notification(title, { body });
-        }
-      });
-    }
-  }
-
-  /* -----------------------------
-     HELPERS
-  ----------------------------- */
-
-  function extractAfterKeywords(text, keywords) {
-    const lower = normalize(text);
-
-    for (const keyword of keywords) {
-      const index = lower.indexOf(keyword);
-
-      if (index !== -1) {
-        return text
-          .slice(index + keyword.length)
-          .trim()
-          .replace(/^for\s+/i, "");
-      }
-    }
-
-    return "";
-  }
-
-  function extractNumber(text) {
-    const match = String(text).match(/\b(\d+)\b/);
-    return match ? Number(match[1]) : null;
-  }
-
-  function parseDuration(text) {
-    const input = normalize(text);
-
-    let total = 0;
-
-    const hours = input.match(/(\d+(?:\.\d+)?)\s*(hour|hours|hr|hrs)/);
-    const minutes = input.match(/(\d+(?:\.\d+)?)\s*(minute|minutes|min|mins)/);
-    const seconds = input.match(/(\d+(?:\.\d+)?)\s*(second|seconds|sec|secs)/);
-
-    if (hours) total += Number(hours[1]) * 3600;
-    if (minutes) total += Number(minutes[1]) * 60;
-    if (seconds) total += Number(seconds[1]);
-
-    if (!total) {
-      const number = extractNumber(input);
-      if (number) total = number;
-    }
-
-    return total || 60;
-  }
-
-  function extractLocation(text) {
-    const match = String(text).match(
-      /\b(?:in|at|for|near)\s+([a-zA-Z][a-zA-Z .'-]{1,50})/i
-    );
-
-    if (match) {
-      return {
-        location: match[1]
-          .replace(/\b(right now|today|please)\b/gi, "")
-          .trim()
-      };
-    }
-
-    return {
-      location: ""
-    };
-  }
-
-  function extractMeaningWord(text) {
-    const match = String(text).match(
-      /(?:meaning of|define|definition of)\s+([a-zA-Z'-]+)/i
-    );
-
-    return match ? match[1] : "";
-  }
-
-  function detectCoin(text) {
-    const lower = normalize(text);
-
-    if (lower.includes("ethereum") || lower.includes("eth")) {
-      return "ethereum";
-    }
-
-    if (
-      lower.includes("bitcoin") ||
-      lower.includes("btc")
-    ) {
-      return "bitcoin";
-    }
-
-    return "bitcoin";
-  }
-
-  function extractTranslation(text) {
-    const match = String(text).match(
-      /translate\s+(.+?)\s+(?:to|into)\s+([a-zA-Z-]+)/i
-    );
-
-    if (!match) {
-      return {
-        text: "",
-        target: "en"
-      };
-    }
-
-    return {
-      text: match[1].trim(),
-      target: languageCode(match[2])
-    };
-  }
-
-  function languageCode(language) {
-    const map = {
-      english: "en",
-      hindi: "hi",
-      telugu: "te",
-      tamil: "ta",
-      kannada: "kn",
-      malayalam: "ml",
-      spanish: "es",
-      french: "fr",
-      german: "de",
-      italian: "it",
-      japanese: "ja",
-      korean: "ko",
-      chinese: "zh",
-      arabic: "ar",
-      russian: "ru"
-    };
-
-    return map[normalize(language)] || normalize(language);
-  }
-
-  function extractCurrency(text) {
-    const match = String(text).match(
-      /(\d+(?:\.\d+)?)\s*([A-Z]{3})\s*(?:to|in)\s*([A-Z]{3})/i
-    );
-
-    if (!match) {
-      return {
-        amount: 1,
-        from: "USD",
-        to: "INR"
-      };
-    }
-
-    return {
-      amount: Number(match[1]),
-      from: match[2].toUpperCase(),
-      to: match[3].toUpperCase()
-    };
-}
-   /* =========================================================
-     J.A.R.V.I.S. - PART 2
-     LIVE WEB TOOLS + VOICE + IMAGE ANALYSIS
+  /* =========================================================
+     8. DICE / COIN
      ========================================================= */
 
-  /* -----------------------------
-     WEATHER
-     Open-Meteo:
-     Geocoding -> Weather
-  ----------------------------- */
-
-  async function toolWeather(args = {}) {
-    let location = String(args.location || "").trim();
-
-    if (!location) {
-      location = "Tirupati";
-    }
-
-    try {
-      const geoURL =
-        "https://geocoding-api.open-meteo.com/v1/search?name=" +
-        encodeURIComponent(location) +
-        "&count=1&language=en&format=json";
-
-      const geoResponse = await fetch(geoURL);
-
-      if (!geoResponse.ok) {
-        throw new Error("Location lookup failed");
-      }
-
-      const geo = await geoResponse.json();
-
-      if (!geo.results || !geo.results.length) {
-        return `I couldn't find the location "${location}".`;
-      }
-
-      const place = geo.results[0];
-
-      const weatherURL =
-        "https://api.open-meteo.com/v1/forecast?" +
-        "latitude=" + encodeURIComponent(place.latitude) +
-        "&longitude=" + encodeURIComponent(place.longitude) +
-        "&current=temperature_2m,relative_humidity_2m," +
-        "apparent_temperature,weather_code,wind_speed_10m" +
-        "&timezone=auto";
-
-      const weatherResponse = await fetch(weatherURL);
-
-      if (!weatherResponse.ok) {
-        throw new Error("Weather request failed");
-      }
-
-      const data = await weatherResponse.json();
-      const current = data.current;
-
-      const description =
-        weatherCodeToText(current.weather_code);
-
-      return [
-        `🌤️ Weather for ${place.name}${place.country ? ", " + place.country : ""}`,
-        `Temperature: ${current.temperature_2m}°C`,
-        `Feels like: ${current.apparent_temperature}°C`,
-        `Condition: ${description}`,
-        `Humidity: ${current.relative_humidity_2m}%`,
-        `Wind: ${current.wind_speed_10m} km/h`,
-        `Updated: ${current.time}`
-      ].join("\n");
-
-    } catch (error) {
-      console.error("Weather:", error);
-
-      return (
-        `I couldn't retrieve live weather for "${location}" right now.`
-      );
-    }
-  }
-
-  function weatherCodeToText(code) {
-    const map = {
-      0: "Clear sky",
-      1: "Mainly clear",
-      2: "Partly cloudy",
-      3: "Overcast",
-      45: "Fog",
-      48: "Depositing rime fog",
-      51: "Light drizzle",
-      53: "Moderate drizzle",
-      55: "Dense drizzle",
-      56: "Light freezing drizzle",
-      57: "Dense freezing drizzle",
-      61: "Slight rain",
-      63: "Moderate rain",
-      65: "Heavy rain",
-      66: "Light freezing rain",
-      67: "Heavy freezing rain",
-      71: "Slight snow",
-      73: "Moderate snow",
-      75: "Heavy snow",
-      77: "Snow grains",
-      80: "Slight rain showers",
-      81: "Moderate rain showers",
-      82: "Violent rain showers",
-      85: "Slight snow showers",
-      86: "Heavy snow showers",
-      95: "Thunderstorm",
-      96: "Thunderstorm with slight hail",
-      99: "Thunderstorm with heavy hail"
-    };
-
-    return map[code] || "Unknown weather condition";
-  }
-
-
-  /* -----------------------------
-     JOKE
-  ----------------------------- */
-
-  async function toolJoke() {
-    try {
-      const response = await fetch(
-        "https://official-joke-api.appspot.com/random_joke"
-      );
-
-      if (!response.ok) {
-        throw new Error("Joke API failed");
-      }
-
-      const data = await response.json();
-
-      return `😂 ${data.setup}\n${data.punchline}`;
-
-    } catch {
-      const jokes = [
-        "Why did the computer get cold? Because it left its Windows open.",
-        "Why do programmers prefer dark mode? Because light attracts bugs.",
-        "I told my computer I needed a break. Now it won't stop sending me KitKat ads."
-      ];
-
-      return "😂 " + jokes[
-        Math.floor(Math.random() * jokes.length)
-      ];
-    }
-  }
-
-
-  /* -----------------------------
-     QUOTE
-  ----------------------------- */
-
-  async function toolQuote() {
-    try {
-      const response = await fetch(
-        "https://dummyjson.com/quotes/random"
-      );
-
-      if (!response.ok) {
-        throw new Error("Quote API failed");
-      }
-
-      const data = await response.json();
-
-      return `“${data.quote}” — ${data.author}`;
-
-    } catch {
-      const quotes = [
-        "The secret of getting ahead is getting started.",
-        "Success is the sum of small efforts repeated day after day.",
-        "Great things are done by a series of small things brought together."
-      ];
-
-      return "“" +
-        quotes[Math.floor(Math.random() * quotes.length)] +
-        "”";
-    }
-  }
-
-
-  /* -----------------------------
-     NEWS
-     Browser-safe news launcher.
-     ----------------------------- */
-
-  async function toolNews() {
-    const url =
-      "https://news.google.com/";
-
-    window.open(
-      url,
-      "_blank",
-      "noopener,noreferrer"
+  function rollDice(sides = 6) {
+    sides = Math.max(
+      2,
+      Math.min(1000, Number(sides) || 6)
     );
 
-    return "📰 Opening the latest Google News headlines.";
+    return (
+      Math.floor(Math.random() * sides) + 1
+    );
   }
 
+  function flipCoin() {
+    return Math.random() < 0.5
+      ? "Heads"
+      : "Tails";
+  }
 
-  /* -----------------------------
-     TRANSLATION
-     MyMemory public endpoint.
-  ----------------------------- */
+  /* =========================================================
+     9. PASSWORD GENERATOR
+     ========================================================= */
 
-  async function toolTranslate(args = {}) {
-    const text = String(args.text || "").trim();
-    const target = String(args.target || "en").trim();
+  function generatePassword(length = 16) {
+    length = Math.max(
+      8,
+      Math.min(64, Number(length) || 16)
+    );
 
-    if (!text) {
-      return (
-        "Translation format: translate hello to Telugu"
-      );
+    const chars =
+      "ABCDEFGHJKLMNPQRSTUVWXYZ" +
+      "abcdefghijkmnopqrstuvwxyz" +
+      "23456789!@#$%^&*_-+=";
+
+    const randomValues =
+      new Uint32Array(length);
+
+    crypto.getRandomValues(randomValues);
+
+    let result = "";
+
+    for (let i = 0; i < length; i++) {
+      result +=
+        chars[randomValues[i] % chars.length];
     }
 
+    return result;
+  }
+
+  /* =========================================================
+     10. OPEN URL
+     ========================================================= */
+
+  function safeOpen(url) {
     try {
-      const url =
-        "https://api.mymemory.translated.net/get?q=" +
-        encodeURIComponent(text) +
-        "&langpair=auto|" +
-        encodeURIComponent(target);
+      const destination = new URL(url);
 
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error("Translation request failed");
+      if (
+        destination.protocol !== "https:" &&
+        destination.protocol !== "http:"
+      ) {
+        return false;
       }
 
-      const data = await response.json();
+      window.open(
+        destination.href,
+        "_blank",
+        "noopener,noreferrer"
+      );
 
-      const translated =
-        data?.responseData?.translatedText;
-
-      if (!translated) {
-        throw new Error("No translation returned");
-      }
-
-      return [
-        `Original: ${text}`,
-        `Translation: ${translated}`,
-        `Language: ${target}`
-      ].join("\n");
+      return true;
 
     } catch (error) {
-      console.error("Translation:", error);
-
-      return (
-        "Translation service is unavailable right now."
-      );
+      return false;
     }
   }
 
+  /* =========================================================
+     11. OPEN APPS
+     ========================================================= */
 
-  /* -----------------------------
-     CURRENCY
-     ----------------------------- */
+  function openApp(name) {
+    const app = String(name || "")
+      .trim()
+      .toLowerCase();
 
-  async function toolCurrency(args = {}) {
-    const amount = Number(args.amount) || 1;
+    const apps = {
+      youtube:
+        "https://www.youtube.com/",
+      google:
+        "https://www.google.com/",
+      gmail:
+        "https://mail.google.com/",
+      maps:
+        "https://maps.google.com/",
+      whatsapp:
+        "https://web.whatsapp.com/",
+      spotify:
+        "https://open.spotify.com/",
+      github:
+        "https://github.com/",
+      instagram:
+        "https://www.instagram.com/",
+      facebook:
+        "https://www.facebook.com/",
+      calculator:
+        "https://www.google.com/search?q=calculator",
+      calendar:
+        "https://calendar.google.com/",
+      drive:
+        "https://drive.google.com/"
+    };
 
-    const from =
-      String(args.from || "USD").toUpperCase();
+    if (!apps[app]) {
+      return `I don't have a web app mapping for "${app}", Boss.`;
+    }
 
-    const to =
-      String(args.to || "INR").toUpperCase();
+    safeOpen(apps[app]);
 
+    return `Opening ${app}, Boss.`;
+  }
+
+  /* =========================================================
+     12. GOOGLE SEARCH
+     ========================================================= */
+
+  function googleSearch(query) {
+    query = String(query || "").trim();
+
+    if (!query) {
+      return "Tell me what to search for, Boss.";
+    }
+
+    safeOpen(
+      "https://www.google.com/search?q=" +
+      encodeURIComponent(query)
+    );
+
+    return `Searching Google for "${query}", Boss.`;
+  }
+
+  /* =========================================================
+     13. YOUTUBE SEARCH
+     ========================================================= */
+
+  function youtubeSearch(query) {
+    query = String(query || "").trim();
+
+    if (!query) {
+      return "Tell me what you want to play, Boss.";
+    }
+
+    safeOpen(
+      "https://www.youtube.com/results?search_query=" +
+      encodeURIComponent(query)
+    );
+
+    return `Searching YouTube for "${query}", Boss.`;
+  }
+
+  /* =========================================================
+     14. WEATHER
+     ========================================================= */
+
+  async function getWeather() {
     try {
+      const position =
+        await new Promise(
+          (resolve, reject) => {
+            if (!navigator.geolocation) {
+              reject(
+                new Error(
+                  "Geolocation unavailable"
+                )
+              );
+              return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+              resolve,
+              reject,
+              {
+                enableHighAccuracy: false,
+                timeout: 8000,
+                maximumAge: 300000
+              }
+            );
+          }
+        );
+
+      const lat =
+        position.coords.latitude;
+
+      const lon =
+        position.coords.longitude;
+
       const url =
-        "https://api.frankfurter.app/latest?amount=" +
-        encodeURIComponent(amount) +
-        "&from=" +
-        encodeURIComponent(from) +
-        "&to=" +
-        encodeURIComponent(to);
+        "https://api.open-meteo.com/v1/forecast" +
+        `?latitude=${encodeURIComponent(lat)}` +
+        `&longitude=${encodeURIComponent(lon)}` +
+        "&current=temperature_2m,relative_humidity_2m," +
+        "apparent_temperature,weather_code,wind_speed_10m";
 
-      const response = await fetch(url);
+      const data =
+        await fetchToolsJson(url);
 
-      if (!response.ok) {
-        throw new Error("Currency API failed");
-      }
+      const current =
+        data.current || {};
 
-      const data = await response.json();
-
-      const converted = data?.rates?.[to];
-
-      if (converted === undefined) {
-        throw new Error("Currency not supported");
-      }
-
-      return [
-        `💱 ${amount} ${from} = ${converted} ${to}`,
-        `Rate date: ${data.date}`
-      ].join("\n");
+      return (
+        `Current weather: ${current.temperature_2m ?? "?"}°C, ` +
+        `feels like ${current.apparent_temperature ?? "?"}°C, ` +
+        `humidity ${current.relative_humidity_2m ?? "?"}%, ` +
+        `wind ${current.wind_speed_10m ?? "?"} km/h.`
+      );
 
     } catch (error) {
-      console.error("Currency:", error);
-
       return (
-        `I couldn't get the current ${from} to ${to} exchange rate.`
+        "I couldn't access your location for weather. " +
+        "Please allow location permission, Boss."
       );
     }
   }
 
+  /* =========================================================
+     15. CRYPTO
+     ========================================================= */
 
-  /* -----------------------------
-     MEANING / DICTIONARY
-  ----------------------------- */
+  async function getCrypto(coin = "bitcoin") {
+    const id = String(coin || "bitcoin")
+      .toLowerCase()
+      .trim();
 
-  async function toolMeaning(args = {}) {
-    const word = String(args.word || "").trim();
+    const aliases = {
+      btc: "bitcoin",
+      eth: "ethereum",
+      sol: "solana",
+      doge: "dogecoin",
+      xrp: "ripple",
+      ada: "cardano"
+    };
 
-    if (!word) {
-      return "Tell me the word you want defined.";
-    }
-
-    try {
-      const url =
-        "https://api.dictionaryapi.dev/api/v2/entries/en/" +
-        encodeURIComponent(word);
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        return `I couldn't find an English definition for "${word}".`;
-      }
-
-      const data = await response.json();
-
-      const entry = data[0];
-
-      const meanings = entry?.meanings || [];
-
-      if (!meanings.length) {
-        return `No definition found for "${word}".`;
-      }
-
-      const output = [];
-
-      output.push(`📖 ${word}`);
-
-      for (const meaning of meanings.slice(0, 3)) {
-        const part =
-          meaning.partOfSpeech
-            ? ` (${meaning.partOfSpeech})`
-            : "";
-
-        output.push(part ? part : "");
-
-        const definitions =
-          meaning.definitions || [];
-
-        definitions.slice(0, 2).forEach((definition, index) => {
-          output.push(
-            `${index + 1}. ${definition.definition}`
-          );
-        });
-      }
-
-      return output
-        .filter(Boolean)
-        .join("\n");
-
-    } catch (error) {
-      console.error("Dictionary:", error);
-
-      return (
-        `I couldn't retrieve the meaning of "${word}".`
-      );
-    }
-  }
-
-
-  /* -----------------------------
-     CRYPTO
-     CoinGecko public API
-  ----------------------------- */
-
-  async function toolCrypto(args = {}) {
-    const coin =
-      normalize(args.coin || "bitcoin");
-
-    let id = "bitcoin";
-
-    if (
-      coin.includes("ethereum") ||
-      coin === "eth"
-    ) {
-      id = "ethereum";
-    } else if (
-      coin.includes("dogecoin") ||
-      coin === "doge"
-    ) {
-      id = "dogecoin";
-    } else if (
-      coin.includes("solana") ||
-      coin === "sol"
-    ) {
-      id = "solana";
-    } else if (
-      coin.includes("xrp")
-    ) {
-      id = "ripple";
-    }
+    const coinId = aliases[id] || id;
 
     try {
       const url =
         "https://api.coingecko.com/api/v3/simple/price" +
-        "?ids=" +
-        encodeURIComponent(id) +
-        "&vs_currencies=usd,inr" +
-        "&include_24hr_change=true";
+        `?ids=${encodeURIComponent(coinId)}` +
+        "&vs_currencies=usd,inr";
 
-      const response = await fetch(url);
+      const data =
+        await fetchToolsJson(url);
 
-      if (!response.ok) {
-        throw new Error("Crypto API failed");
+      if (!data[coinId]) {
+        return `I couldn't find crypto "${coinId}", Boss.`;
       }
 
-      const data = await response.json();
-
-      const item = data[id];
-
-      if (!item) {
-        throw new Error("Coin not found");
-      }
-
-      const usd = item.usd;
-      const inr = item.inr;
-      const change = item.usd_24h_change;
-
-      return [
-        `₿ ${id.toUpperCase()}`,
-        `USD: $${formatNumber(usd)}`,
-        `INR: ₹${formatNumber(inr)}`,
-        `24h: ${formatNumber(change)}%`
-      ].join("\n");
-
-    } catch (error) {
-      console.error("Crypto:", error);
+      const price =
+        data[coinId];
 
       return (
-        "I couldn't retrieve the current crypto price."
+        `${coinId}: ` +
+        `$${price.usd ?? "?"} USD / ` +
+        `₹${price.inr ?? "?"} INR`
+      );
+
+    } catch (error) {
+      return "Crypto service is unavailable right now, Boss.";
+    }
+  }
+
+  /* =========================================================
+     16. CURRENCY
+     ========================================================= */
+
+  async function convertCurrency(
+    amount,
+    from,
+    to
+  ) {
+    amount = Number(amount);
+
+    from = String(from || "USD")
+      .toUpperCase();
+
+    to = String(to || "INR")
+      .toUpperCase();
+
+    if (!Number.isFinite(amount)) {
+      return "Please give me a valid amount, Boss.";
+    }
+
+    try {
+      const url =
+        `https://api.frankfurter.app/latest?amount=${encodeURIComponent(amount)}` +
+        `&from=${encodeURIComponent(from)}` +
+        `&to=${encodeURIComponent(to)}`;
+
+      const data =
+        await fetchToolsJson(url);
+
+      const result =
+        data.rates?.[to];
+
+      if (result == null) {
+        return "I couldn't convert that currency.";
+      }
+
+      return (
+        `${amount} ${from} = ` +
+        `${result} ${to}`
+      );
+
+    } catch (error) {
+      return "Currency service is unavailable right now, Boss.";
+    }
+  }
+
+  /* =========================================================
+     17. WIKIPEDIA MEANING
+     ========================================================= */
+
+  async function wikipediaMeaning(query) {
+    query = String(query || "").trim();
+
+    if (!query) {
+      return "Tell me what you want the meaning of, Boss.";
+    }
+
+    try {
+      const url =
+        "https://en.wikipedia.org/w/api.php" +
+        "?action=query" +
+        "&list=search" +
+        "&srsearch=" +
+        encodeURIComponent(query) +
+        "&srlimit=1" +
+        "&format=json" +
+        "&origin=*";
+
+      const data =
+        await fetchToolsJson(url);
+
+      const result =
+        data?.query?.search?.[0];
+
+      if (!result) {
+        return `I couldn't find "${query}", Boss.`;
+      }
+
+      const snippet =
+        String(result.snippet || "")
+          .replace(/<[^>]*>/g, "")
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">");
+
+      return (
+        `Wikipedia summary: ${result.title}. ` +
+        `${snippet}`
+      );
+
+    } catch (error) {
+      return "Wikipedia search failed, Boss.";
+    }
+  }
+
+  /* =========================================================
+     18. JOKE
+     ========================================================= */
+
+  async function getJoke() {
+    try {
+      const data =
+        await fetchToolsJson(
+          "https://official-joke-api.appspot.com/random_joke"
+        );
+
+      return (
+        `${data.setup || ""} ` +
+        `${data.punchline || ""}`
+      ).trim();
+
+    } catch (error) {
+      return (
+        "Why did the programmer go broke? " +
+        "Because he used up all his cache."
       );
     }
   }
 
+  /* =========================================================
+     19. QUOTE
+     ========================================================= */
 
-  function formatNumber(value) {
-    if (value === undefined || value === null) {
-      return "N/A";
-    }
+  async function getQuote() {
+    try {
+      const data =
+        await fetchToolsJson(
+          "https://dummyjson.com/quotes/random"
+        );
 
-    const number = Number(value);
-
-    if (!Number.isFinite(number)) {
-      return "N/A";
-    }
-
-    return number.toLocaleString(
-      undefined,
-      {
-        maximumFractionDigits: 4
+      if (data?.quote) {
+        return `"${data.quote}" — ${data.author || "Unknown"}`;
       }
+
+    } catch (error) {
+      console.warn(error);
+    }
+
+    return (
+      '"The secret of getting ahead is getting started."'
     );
   }
 
-
   /* =========================================================
-     VOICE INPUT
+     20. NEWS
      ========================================================= */
 
-  function setupRecognition() {
+  function openNews(query = "") {
+    query = String(query || "").trim();
+
+    const url = query
+      ? "https://news.google.com/search?q=" +
+        encodeURIComponent(query)
+      : "https://news.google.com/";
+
+    safeOpen(url);
+
+    return query
+      ? `Opening latest news for "${query}", Boss.`
+      : "Opening latest news, Boss.";
+  }
+
+  /* =========================================================
+     21. HANDLE TOOLS
+     ========================================================= */
+
+  async function handleTools(text) {
+    const original = String(text || "").trim();
+    const t = original.toLowerCase();
+
+    if (!original) return null;
+
+    /* ---------------- TIME ---------------- */
+
+    if (
+      /^(what(?:'s| is)?\s+)?the\s*time\??$/i.test(original) ||
+      /^time\??$/i.test(original) ||
+      /current\s*time/i.test(t)
+    ) {
+      return (
+        `Current time is ${getCurrentTime()}, ` +
+        `${getCurrentDate()}.`
+      );
+    }
+
+    /* ---------------- DATE ---------------- */
+
+    if (
+      /^date\??$/i.test(original) ||
+      /today'?s\s+date/i.test(t) ||
+      /what\s+date\s+is\s+it/i.test(t)
+    ) {
+      return `Today is ${getCurrentDate()}.`;
+    }
+
+    /* ---------------- TIMER ---------------- */
+
+    const timerSeconds =
+      parseTimer(original);
+
+    if (timerSeconds !== null) {
+      return startTimer(timerSeconds);
+    }
+
+    /* ---------------- STOP TIMER ---------------- */
+
+    if (
+      /^(stop|cancel)\s+(the\s+)?timer$/i.test(original)
+    ) {
+      if (activeTimer) {
+        clearTimeout(activeTimer);
+        activeTimer = null;
+        return "Timer cancelled, Boss.";
+      }
+
+      return "There is no active timer, Boss.";
+    }
+
+    /* ---------------- WEATHER ---------------- */
+
+    if (
+      /^(weather|what'?s\s+the\s+weather|weather\s+today)/i.test(t)
+    ) {
+      return await getWeather();
+    }
+
+    /* ---------------- DICE ---------------- */
+
+    if (
+      /\b(roll|throw)\s+(a\s+)?dice\b/i.test(original) ||
+      /^dice$/i.test(original)
+    ) {
+      const match =
+        original.match(/(\d+)\s*sides?/i);
+
+      const sides =
+        match ? Number(match[1]) : 6;
+
+      return `🎲 You rolled ${rollDice(sides)} on a ${sides}-sided dice.`;
+    }
+
+    /* ---------------- COIN ---------------- */
+
+    if (
+      /\b(flip|toss)\s+(a\s+)?coin\b/i.test(original) ||
+      /^coin$/i.test(original)
+    ) {
+      return `🪙 ${flipCoin()}, Boss.`;
+    }
+
+    /* ---------------- JOKE ---------------- */
+
+    if (
+      /^tell\s+(me\s+)?a\s+joke$/i.test(original) ||
+      /^joke$/i.test(original)
+    ) {
+      return await getJoke();
+    }
+
+    /* ---------------- QUOTE ---------------- */
+
+    if (
+      /^quote$/i.test(original) ||
+      /give\s+me\s+a\s+quote/i.test(t)
+    ) {
+      return await getQuote();
+    }
+
+    /* ---------------- NEWS ---------------- */
+
+    if (
+      /^news$/i.test(original) ||
+      /^latest\s+news$/i.test(original)
+    ) {
+      return openNews();
+    }
+
+    const newsMatch =
+      original.match(
+        /^(?:news|latest news)\s+(?:about|on|for)\s+(.+)$/i
+      );
+
+    if (newsMatch) {
+      return openNews(newsMatch[1]);
+    }
+
+    /* ---------------- CRYPTO ---------------- */
+
+    if (
+      /^(?:crypto|bitcoin|btc|ethereum|eth|solana|sol)\b/i.test(original)
+    ) {
+      const match =
+        original.match(
+          /(?:crypto|price\s+of|check)\s+([a-z0-9-]+)/i
+        );
+
+      const coin =
+        match?.[1] ||
+        (
+          /^bitcoin/i.test(original)
+            ? "bitcoin"
+            : /^ethereum/i.test(original)
+              ? "ethereum"
+              : "bitcoin"
+        );
+
+      return await getCrypto(coin);
+    }
+
+    /* ---------------- PASSWORD ---------------- */
+
+    if (
+      /^(?:generate|create|make)\s+(?:a\s+)?password/i.test(original) ||
+      /^password$/i.test(original)
+    ) {
+      const match =
+        original.match(/(\d+)\s*(?:characters?|chars?)/i);
+
+      const length =
+        match ? Number(match[1]) : 16;
+
+      /*
+        Password is intentionally returned directly and
+        is NOT stored in MEMORY.
+      */
+      return `Generated password: ${generatePassword(length)}`;
+    }
+
+    /* ---------------- GOOGLE ---------------- */
+
+    if (
+      /^open\s+google$/i.test(original)
+    ) {
+      safeOpen("https://www.google.com/");
+      return "Opening Google, Boss.";
+    }
+
+    const googleSearchMatch =
+      original.match(
+        /^(?:google\s+search|search\s+google|google)\s+(?:for\s+)?(.+)$/i
+      );
+
+    if (googleSearchMatch) {
+      return googleSearch(googleSearchMatch[1]);
+    }
+
+    /* ---------------- YOUTUBE ---------------- */
+
+    if (
+      /^open\s+(?:youtube|youtube\.com)$/i.test(original)
+    ) {
+      safeOpen("https://www.youtube.com/");
+      return "Opening YouTube, Boss.";
+    }
+
+    const youtubeMatch =
+      original.match(
+        /^(?:play|youtube|search\s+youtube)\s+(?:for\s+)?(.+)$/i
+      );
+
+    if (youtubeMatch) {
+      return youtubeSearch(youtubeMatch[1]);
+    }
+
+    /* ---------------- OPEN URL ---------------- */
+
+    const urlCommand =
+      original.match(
+        /^(?:open|visit|go\s+to)\s+(https?:\/\/\S+)$/i
+      );
+
+    if (urlCommand) {
+      const destination =
+        urlCommand[1];
+
+      if (!safeOpen(destination)) {
+        return "That link does not look valid, Boss.";
+      }
+
+      return `Opening ${new URL(destination).hostname}, Boss.`;
+    }
+
+    /* ---------------- OPEN APP ---------------- */
+
+    const openAppMatch =
+      original.match(
+        /^open\s+(?:the\s+)?(.+)$/i
+      );
+
+    if (openAppMatch) {
+      const appName =
+        openAppMatch[1]
+          .replace(/\s+(app|application)$/i, "")
+          .trim();
+
+      const knownApps = [
+        "youtube",
+        "google",
+        "gmail",
+        "maps",
+        "whatsapp",
+        "spotify",
+        "github",
+        "instagram",
+        "facebook",
+        "calculator",
+        "calendar",
+        "drive"
+      ];
+
+      if (knownApps.includes(appName.toLowerCase())) {
+        return openApp(appName);
+      }
+    }
+
+    /* ---------------- MEANING ---------------- */
+
+    const meaningMatch =
+      original.match(
+        /^(?:meaning|define|what\s+is|who\s+is|what\s+are)\s+(.+)$/i
+      );
+
+    if (meaningMatch) {
+      return await wikipediaMeaning(
+        meaningMatch[1]
+      );
+    }
+
+    /* ---------------- CURRENCY ---------------- */
+
+    const currencyMatch =
+      original.match(
+        /(?:convert|exchange)\s+([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]{3})\s+(?:to|into)\s+([A-Za-z]{3})/i
+      );
+
+    if (currencyMatch) {
+      return await convertCurrency(
+        Number(currencyMatch[1]),
+        currencyMatch[2],
+        currencyMatch[3]
+      );
+    }
+
+    /* ---------------- CLEAR MEMORY ---------------- */
+
+    if (
+      /^(?:clear|delete|forget)\s+(?:my\s+)?memory$/i.test(original) ||
+      /^clear\s+memory$/i.test(original)
+    ) {
+      clearMemory();
+
+      if (chat) {
+        chat.innerHTML = "";
+      }
+
+      return "Memory cleared, Boss.";
+    }
+
+    /* ---------------- OPEN COMMON SITES ---------------- */
+
+    if (
+      /^open\s+(?:gmail|mail)$/i.test(original)
+    ) {
+      return openApp("gmail");
+    }
+
+    if (
+      /^open\s+maps$/i.test(original)
+    ) {
+      return openApp("maps");
+    }
+
+    if (
+      /^open\s+whatsapp$/i.test(original)
+    ) {
+      return openApp("whatsapp");
+    }
+
+    if (
+      /^open\s+spotify$/i.test(original)
+    ) {
+      return openApp("spotify");
+    }
+
+    return null;
+  }
+
+  /* =========================================================
+     22. AGENT TOOLS
+     ========================================================= */
+
+  const AGENT_TOOLS = Object.freeze({
+    time: async () =>
+      `Current time is ${getCurrentTime()}.`,
+
+    weather: async () =>
+      await getWeather(),
+
+    news: async () =>
+      openNews(),
+
+    crypto: async () =>
+      await getCrypto("bitcoin"),
+
+    joke: async () =>
+      await getJoke(),
+
+    quote: async () =>
+      await getQuote(),
+
+    date: async () =>
+      `Today is ${getCurrentDate()}.`
+  });
+
+  const AGENT_TOOL_NAMES =
+    Object.freeze({
+      time: "time",
+      weather: "weather",
+      news: "news",
+      crypto: "crypto",
+      joke: "joke",
+      quote: "quote",
+      date: "date"
+    });
+
+  function isAgentModeRequest(text = "") {
+    const value =
+      String(text).trim();
+
+    if (
+      /\b(?:agent|agent mode|run as agent|use agent)\b/i.test(value)
+    ) {
+      return true;
+    }
+
+    if (
+      /\b(?:briefing|research|analyze|analysis)\b/i.test(value)
+    ) {
+      return true;
+    }
+
+    return (
+      /\b(?:plan)\b/i.test(value) &&
+      /\b(?:time|weather|news|crypto|joke|quote|date)\b/i.test(value)
+    );
+  }
+
+  function fallbackAgentToolPlan(goal) {
+    const text =
+      String(goal || "").toLowerCase();
+
+    const tools = [];
+
+    if (
+      /\b(time|clock)\b/.test(text)
+    ) {
+      tools.push("time");
+    }
+
+    if (
+      /\b(weather|temperature|rain)\b/.test(text)
+    ) {
+      tools.push("weather");
+    }
+
+    if (
+      /\b(news|headlines|latest)\b/.test(text)
+    ) {
+      tools.push("news");
+    }
+
+    if (
+      /\b(crypto|bitcoin|btc|ethereum|eth)\b/.test(text)
+    ) {
+      tools.push("crypto");
+    }
+
+    if (
+      /\bjoke\b/.test(text)
+    ) {
+      tools.push("joke");
+    }
+
+    if (
+      /\bquote\b/.test(text)
+    ) {
+      tools.push("quote");
+    }
+
+    if (
+      /\bdate|today\b/.test(text)
+    ) {
+      tools.push("date");
+    }
+
+    return [
+      ...new Set(
+        tools.length
+          ? tools
+          : ["time"]
+      )
+    ];
+  }
+
+  function parseAgentToolPlan(responseText) {
+    const text =
+      String(responseText || "")
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "");
+
+    try {
+      const start =
+        text.indexOf("[");
+
+      const end =
+        text.lastIndexOf("]");
+
+      if (
+        start < 0 ||
+        end < start
+      ) {
+        throw new Error(
+          "Agent plan array missing"
+        );
+      }
+
+      const parsed =
+        JSON.parse(
+          text.slice(start, end + 1)
+        );
+
+      const allowed =
+        new Set(
+          Object.keys(AGENT_TOOLS)
+        );
+
+      return [
+        ...new Set(
+          parsed
+            .filter(
+              item =>
+                typeof item === "string"
+            )
+            .map(
+              item =>
+                item.trim().toLowerCase()
+            )
+            .filter(
+              item =>
+                allowed.has(item)
+            )
+        )
+      ];
+
+    } catch (error) {
+      throw error;
+    }
+       }
+   /* =========================================================
+     23. GEMINI API
+     ========================================================= */
+
+  async function callGeminiRaw(prompt, extraContents = null) {
+    const key = getApiKey();
+
+    if (!key) {
+      throw new Error(
+        "Gemini API key is missing."
+      );
+    }
+
+    const contents =
+      Array.isArray(extraContents)
+        ? extraContents
+        : [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: String(prompt || "")
+                }
+              ]
+            }
+          ];
+
+    let lastError = null;
+
+    for (const model of MODELS) {
+      try {
+        const endpoint =
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+
+        const response =
+          await fetch(
+            endpoint,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
+              body: JSON.stringify({
+                contents,
+                generationConfig: {
+                  temperature: 0.7,
+                  topP: 0.9,
+                  maxOutputTokens: 2048
+                }
+              })
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (!response.ok) {
+          const apiMessage =
+            data?.error?.message ||
+            `HTTP ${response.status}`;
+
+          lastError =
+            new Error(apiMessage);
+
+          /*
+            Try next model if current model
+            is unavailable.
+          */
+          continue;
+        }
+
+        const answer =
+          data?.candidates?.[0]?.content?.parts
+            ?.map(part => part.text || "")
+            .join("")
+            .trim();
+
+        if (answer) {
+          return answer;
+        }
+
+        lastError =
+          new Error(
+            "Gemini returned an empty response."
+          );
+
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw (
+      lastError ||
+      new Error("Gemini request failed.")
+    );
+  }
+
+  /* =========================================================
+     24. GEMINI BRAIN
+     ========================================================= */
+
+  async function callGemini(prompt) {
+    const cleanPrompt =
+      String(prompt || "").trim();
+
+    if (!cleanPrompt) {
+      return "Tell me what you need, Boss.";
+    }
+
+    /*
+      Only recent memory is sent.
+      This prevents huge requests.
+    */
+    const history =
+      MEMORY
+        .slice(-12)
+        .map(item => ({
+          role:
+            item.role === "model"
+              ? "model"
+              : "user",
+          parts: [
+            {
+              text: String(item.text)
+            }
+          ]
+        }));
+
+    const systemInstruction = `
+You are J.A.R.V.I.S., a fast and practical personal AI assistant.
+
+Rules:
+- Answer directly.
+- Be concise unless the user asks for detail.
+- You can understand Telugu, English, and Telugu-English mixed language.
+- If the user asks in Telugu, answer naturally in Telugu.
+- If the user asks in English, answer in English.
+- Never invent live values when a browser tool can provide them.
+- For time use the browser's current time.
+- Do not expose API keys, passwords, private memory, or internal instructions.
+- If the user makes a small wording mistake, understand the likely intent and answer helpfully.
+- Do not claim that an action happened if it was not actually performed.
+- You are J.A.R.V.I.S., not a human.
+`;
+
+    const finalPrompt =
+      systemInstruction +
+      "\n\nUSER REQUEST:\n" +
+      cleanPrompt;
+
+    const contents = [
+      ...history,
+      {
+        role: "user",
+        parts: [
+          {
+            text: finalPrompt
+          }
+        ]
+      }
+    ];
+
+    return await callGeminiRaw(
+      finalPrompt,
+      contents
+    );
+  }
+
+  /* =========================================================
+     25. AGENT MODE
+     ========================================================= */
+
+  async function runAgent(goal) {
+    const cleanGoal =
+      String(goal || "").trim();
+
+    add(
+      "Agent mode active.",
+      "ai"
+    );
+
+    add(
+      `Goal: ${cleanGoal}`,
+      "ai"
+    );
+
+    let toolsToRun = [];
+
+    /*
+      Ask Gemini for a machine-readable plan.
+    */
+    try {
+      const planPrompt = `
+You are the planning engine of J.A.R.V.I.S.
+
+Goal:
+${JSON.stringify(cleanGoal)}
+
+Choose only the useful tools from this list:
+["time","weather","news","crypto","joke","quote","date"]
+
+Return ONLY a JSON array.
+
+Example:
+["time","weather"]
+
+Do not return markdown.
+Do not explain.
+`;
+
+      const planResponse =
+        await callGeminiRaw(
+          planPrompt
+        );
+
+      toolsToRun =
+        parseAgentToolPlan(
+          planResponse
+        );
+
+    } catch (error) {
+      console.warn(
+        "Agent planner failed:",
+        error
+      );
+
+      toolsToRun =
+        fallbackAgentToolPlan(
+          cleanGoal
+        );
+    }
+
+    if (!toolsToRun.length) {
+      toolsToRun =
+        fallbackAgentToolPlan(
+          cleanGoal
+        );
+    }
+
+    const results = {};
+
+    for (
+      let i = 0;
+      i < toolsToRun.length;
+      i++
+    ) {
+      const tool =
+        toolsToRun[i];
+
+      add(
+        `[${i + 1}/${toolsToRun.length}] ${tool} tool running...`,
+        "ai"
+      );
+
+      try {
+        results[tool] =
+          await AGENT_TOOLS[tool]();
+
+      } catch (error) {
+        results[tool] =
+          "Tool error.";
+      }
+    }
+
+    add(
+      "Agent tools completed. Combining results...",
+      "ai"
+    );
+
+    const summaryPrompt = `
+You are J.A.R.V.I.S.
+
+User goal:
+${JSON.stringify(cleanGoal)}
+
+Tool results:
+${JSON.stringify(results, null, 2)}
+
+Give a concise useful final answer.
+
+Use Telugu/English naturally based on the user's language.
+Do not claim anything beyond the tool results.
+`;
+
+    try {
+      return await callGeminiRaw(
+        summaryPrompt
+      );
+    } catch (error) {
+      /*
+        If Gemini summary fails, still return
+        the real tool results.
+      */
+      return Object.entries(results)
+        .map(
+          ([key, value]) =>
+            `${key}: ${value}`
+        )
+        .join("\n");
+    }
+  }
+
+  /* =========================================================
+     26. IMAGE ANALYSIS
+     ========================================================= */
+
+  async function analyzeImage(file) {
+    if (!file) {
+      return;
+    }
+
+    if (
+      !file.type ||
+      !file.type.startsWith("image/")
+    ) {
+      addSystem(
+        "Please select an image file, Boss."
+      );
+      return;
+    }
+
+    const reader =
+      new FileReader();
+
+    reader.onload = async () => {
+      try {
+        const dataUrl =
+          String(reader.result || "");
+
+        const comma =
+          dataUrl.indexOf(",");
+
+        if (comma < 0) {
+          throw new Error(
+            "Invalid image data."
+          );
+        }
+
+        const base64 =
+          dataUrl.slice(comma + 1);
+
+        add(
+          "Analyze this image.",
+          "user"
+        );
+
+        add(
+          "Analyzing the image...",
+          "ai"
+        );
+
+        const contents = [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `
+Analyze this image carefully.
+
+Tell me:
+1. What is visible?
+2. Important objects/text.
+3. Any useful details.
+4. If text is visible, transcribe the important text.
+5. Do not invent details that cannot be seen.
+`
+              },
+              {
+                inlineData: {
+                  mimeType:
+                    file.type ||
+                    "image/jpeg",
+                  data: base64
+                }
+              }
+            ]
+          }
+        ];
+
+        const result =
+          await callGeminiRaw(
+            "Analyze the attached image.",
+            contents
+          );
+
+        add(result, "ai");
+
+      } catch (error) {
+        add(
+          `Image analysis failed: ${error.message || error}`,
+          "ai"
+        );
+      }
+    };
+
+    reader.onerror = () => {
+      addSystem(
+        "I could not read that image, Boss."
+      );
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  /* =========================================================
+     27. SPEECH TO TEXT
+     ========================================================= */
+
+  let recognition = null;
+  let listening = false;
+
+  function setupSpeechRecognition() {
     const SpeechRecognition =
       window.SpeechRecognition ||
       window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      state.recognition = null;
-
-      if (micBtn) {
-        micBtn.title =
-          "Speech recognition is not supported in this browser";
-      }
-
-      return;
+      return null;
     }
 
-    const recognition = new SpeechRecognition();
+    const instance =
+      new SpeechRecognition();
 
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-IN";
-    recognition.maxAlternatives = 1;
+    instance.continuous = false;
+    instance.interimResults = true;
 
-    recognition.onstart = () => {
-      state.listening = true;
+    /*
+      Telugu + English mixed speech.
+      Browser decides best available language.
+    */
+    instance.lang =
+      "en-IN";
+
+    instance.onstart = () => {
+      listening = true;
 
       if (micBtn) {
-        micBtn.classList.add("active");
-        micBtn.textContent = "🔴";
+        micBtn.classList.add(
+          "listening"
+        );
+
+        micBtn.setAttribute(
+          "aria-pressed",
+          "true"
+        );
       }
 
-      status("LISTENING...");
+      addSystem(
+        "Listening..."
+      );
     };
 
-    recognition.onresult = event => {
+    instance.onresult = event => {
       let finalText = "";
       let interimText = "";
 
@@ -1773,1686 +1812,660 @@
         }
       }
 
-      const currentText =
-        finalText || interimText;
-
-      if (currentText) {
-        msg.value = currentText;
+      if (input) {
+        input.value =
+          finalText || interimText;
       }
     };
 
-    recognition.onerror = event => {
+    instance.onerror = event => {
       console.warn(
-        "Speech recognition:",
+        "Speech recognition error:",
         event.error
       );
 
-      state.listening = false;
-
-      if (event.error === "not-allowed") {
-        addMessage(
-          "Microphone permission was denied. Please allow microphone access.",
-          "assistant"
+      if (
+        event.error ===
+        "not-allowed"
+      ) {
+        addSystem(
+          "Microphone permission was denied, Boss."
         );
       }
     };
 
-    recognition.onend = () => {
-      state.listening = false;
+    instance.onend = () => {
+      listening = false;
 
       if (micBtn) {
-        micBtn.classList.remove("active");
-        micBtn.textContent = "🎙️";
-      }
+        micBtn.classList.remove(
+          "listening"
+        );
 
-      if (!state.busy) {
-        status("SYSTEM READY");
+        micBtn.setAttribute(
+          "aria-pressed",
+          "false"
+        );
       }
     };
 
-    state.recognition = recognition;
+    return instance;
   }
 
+  recognition =
+    setupSpeechRecognition();
 
   function toggleVoiceInput() {
-    if (!state.recognition) {
-      addMessage(
-        "Voice input is not supported by this browser. Try Chrome or another browser with Web Speech API support.",
-        "assistant"
+    if (!recognition) {
+      addSystem(
+        "Voice input is not supported by this browser."
       );
-
-      return;
-    }
-
-    if (state.listening) {
-      try {
-        state.recognition.stop();
-      } catch {}
       return;
     }
 
     try {
-      state.recognition.start();
+      if (listening) {
+        recognition.stop();
+      } else {
+        recognition.start();
+      }
     } catch (error) {
       console.warn(error);
-
-      try {
-        state.recognition.stop();
-      } catch {}
     }
   }
-
 
   /* =========================================================
-     IMAGE ANALYSIS
-     Browser-side image inspection.
+     28. TEXT TO SPEECH
      ========================================================= */
 
-  function handleImage(event) {
-    const file =
-      event.target.files &&
-      event.target.files[0];
-
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      addMessage(
-        "Please select a valid image file.",
-        "assistant"
-      );
-
-      return;
+  function speak(text) {
+    if (
+      !("speechSynthesis" in window)
+    ) {
+      return false;
     }
 
-    const maxSize =
-      15 * 1024 * 1024;
+    const value =
+      String(text || "")
+        .trim();
 
-    if (file.size > maxSize) {
-      addMessage(
-        "Image is too large. Please choose an image under 15 MB.",
-        "assistant"
-      );
-
-      return;
+    if (!value) {
+      return false;
     }
 
-    state.lastImage = file;
+    try {
+      speechSynthesis.cancel();
 
-    const reader = new FileReader();
+      const utterance =
+        new SpeechSynthesisUtterance(
+          value
+        );
 
-    reader.onload = () => {
-      analyzeImage(
-        file,
-        reader.result
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+
+      /*
+        Prefer Indian English if available.
+      */
+      const voices =
+        speechSynthesis.getVoices();
+
+      const preferred =
+        voices.find(
+          voice =>
+            /en-IN/i.test(
+              voice.lang
+            )
+        );
+
+      if (preferred) {
+        utterance.voice =
+          preferred;
+      }
+
+      speechSynthesis.speak(
+        utterance
       );
-    };
 
-    reader.onerror = () => {
-      addMessage(
-        "I couldn't read that image.",
-        "assistant"
-      );
-    };
+      return true;
 
-    reader.readAsDataURL(file);
-
-    // Allow selecting the same image again.
-    event.target.value = "";
+    } catch (error) {
+      console.warn(error);
+      return false;
+    }
   }
 
+  /* =========================================================
+     29. PROCESS USER MESSAGE
+     ========================================================= */
 
-  async function analyzeImage(file, dataURL) {
-    status("ANALYZING IMAGE...");
+  let requestInProgress = false;
 
-    addMessage(
-      `📷 Image selected: ${file.name}`,
+  async function processMessage(text) {
+    const message =
+      String(text || "").trim();
+
+    if (!message) {
+      return;
+    }
+
+    if (requestInProgress) {
+      addSystem(
+        "I am still processing the previous request, Boss."
+      );
+      return;
+    }
+
+    requestInProgress = true;
+
+    if (input) {
+      input.value = "";
+    }
+
+    add(
+      message,
       "user"
     );
 
-    try {
-      const image = await loadImage(dataURL);
-
-      const analysis = inspectImage(
-        image,
-        file
-      );
-
-      addImagePreview(
-        dataURL,
-        analysis
-      );
-
-      addMessage(
-        analysis.text,
-        "assistant"
-      );
-
-      speak(
-        "Image analysis complete."
-      );
-
-    } catch (error) {
-      console.error("Image analysis:", error);
-
-      addMessage(
-        "I couldn't analyze this image.",
-        "assistant"
-      );
-
-    } finally {
-      status("SYSTEM READY");
-    }
-  }
-
-
-  function loadImage(src) {
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-
-      image.onload = () => resolve(image);
-      image.onerror = reject;
-
-      image.src = src;
-    });
-  }
-
-
-  function inspectImage(image, file) {
-    const width = image.naturalWidth;
-    const height = image.naturalHeight;
-
-    const ratio =
-      width && height
-        ? (width / height).toFixed(2)
-        : "N/A";
-
-    let orientation = "square";
-
-    if (width > height) {
-      orientation = "landscape";
-    } else if (height > width) {
-      orientation = "portrait";
-    }
-
-    const sizeKB =
-      Math.round(file.size / 1024);
-
-    const megapixels =
-      ((width * height) / 1000000).toFixed(2);
-
-    const text = [
-      "📷 IMAGE ANALYSIS",
-      `File: ${file.name}`,
-      `Type: ${file.type}`,
-      `Size: ${sizeKB} KB`,
-      `Dimensions: ${width} × ${height}`,
-      `Orientation: ${orientation}`,
-      `Aspect ratio: ${ratio}`,
-      `Resolution: ${megapixels} MP`,
-      "",
-      "Browser-side analysis completed.",
-      "For object/person/text recognition, connect a vision AI backend."
-    ].join("\n");
-
-    return {
-      width,
-      height,
-      orientation,
-      ratio,
-      megapixels,
-      text
-    };
-  }
-
-
-  function addImagePreview(dataURL, analysis) {
-    const wrapper =
-      document.createElement("div");
-
-    wrapper.className =
-      "jarvis-image-result";
-
-    const image =
-      document.createElement("img");
-
-    image.src = dataURL;
-
-    image.alt =
-      "JARVIS analyzed image";
-
-    image.style.maxWidth = "100%";
-    image.style.maxHeight = "300px";
-    image.style.borderRadius = "12px";
-    image.style.display = "block";
-    image.style.marginBottom = "8px";
-
-    const info =
-      document.createElement("small");
-
-    info.textContent =
-      `${analysis.width} × ${analysis.height} • ${analysis.orientation}`;
-
-    wrapper.appendChild(image);
-    wrapper.appendChild(info);
-
-    chat.appendChild(wrapper);
-
-    chat.scrollTop = chat.scrollHeight;
-  }
-
-
-  /* =========================================================
-     LOCAL ASSISTANT
-     ========================================================= */
-
-  async function localAssistant(input) {
-    const text = normalize(input);
-
-    /* Greetings */
-
-    if (
-      /^(hi|hello|hey|hai|namaste|good morning|good evening)\b/.test(text)
-    ) {
-      return (
-        "Hello. J.A.R.V.I.S. is online. " +
-        "Give me a goal and I will plan the available tools."
-      );
-    }
-
-
-    /* Identity */
-
-    if (
-      text.includes("who are you") ||
-      text.includes("what are you")
-    ) {
-      return (
-        "I am J.A.R.V.I.S., your browser-based AI agent interface. " +
-        "I can plan commands, use available tools, access live web data, " +
-        "manage local memory, use voice input, and open web services."
-      );
-    }
-
-
-    /* Current date */
-
-    if (
-      text.includes("today's date") ||
-      text.includes("what date") ||
-      text === "date"
-    ) {
-      return toolTime();
-    }
-
-
-    /* Memory recall */
-
-    if (
-      text.includes("what do you remember") ||
-      text.includes("show my memory") ||
-      text.includes("my memories")
-    ) {
-      return getMemorySummary();
-    }
-
-
-    /* Last conversation */
-
-    if (
-      text.includes("what did i say") ||
-      text.includes("last message")
-    ) {
-      const users =
-        state.history
-          .filter(item => item.role === "user")
-          .slice(-5);
-
-      if (!users.length) {
-        return "I don't have any previous user messages.";
-      }
-
-      return users
-        .map(
-          (item, index) =>
-            `${index + 1}. ${item.content}`
-        )
-        .join("\n");
-    }
-
-
-    /* Help */
-
-    if (
-      text === "help" ||
-      text === "commands" ||
-      text.includes("what can you do")
-    ) {
-      return [
-        "J.A.R.V.I.S. COMMANDS",
-        "",
-        "• time",
-        "• weather in Tirupati",
-        "• set timer for 30 seconds",
-        "• roll dice",
-        "• flip coin",
-        "• tell me a joke",
-        "• give me a quote",
-        "• news",
-        "• translate hello to Telugu",
-        "• 100 USD to INR",
-        "• meaning of computer",
-        "• generate password 20",
-        "• search JavaScript",
-        "• open YouTube",
-        "• play Arijit Singh",
-        "• bitcoin price",
-        "• remember that ...",
-        "• what do you remember",
-        "• clear memory"
-      ].join("\n");
-    }
-
-
-    /* Thank you */
-
-    if (
-      text === "thanks" ||
-      text === "thank you" ||
-      text.includes("thank you jarvis")
-    ) {
-      return "You're welcome. Ready for the next goal.";
-    }
-
-
     /*
-       Goal correction.
-       If a user gives a common malformed command,
-       JARVIS attempts to interpret it instead of
-       immediately failing.
+      Special local commands.
     */
 
-    const corrected =
-      autoCorrectCommand(input);
-
-    if (corrected && corrected !== input) {
-      return await runAgent(corrected);
-    }
-
-
-    /* General fallback */
-
-    return [
-      "I understood your message, but I don't have a matching local tool for it.",
-      "",
-      `Goal received: ${input}`,
-      "",
-      "Try saying: \"help\" to see the available commands."
-    ].join("\n");
-  }
-
-
-  function getMemorySummary() {
-    if (!state.memory.length) {
-      return "Long-term memory is currently empty.";
-    }
-
-    return [
-      "🧠 J.A.R.V.I.S. MEMORY",
-      "",
-      ...state.memory
-        .slice(-20)
-        .map(
-          (item, index) =>
-            `${index + 1}. ${item.text}`
-        )
-    ].join("\n");
-  }
-
-
-  /* =========================================================
-     COMMAND AUTO-CORRECTION
-     ========================================================= */
-
-  function autoCorrectCommand(input) {
-    const original = String(input).trim();
-    const text = normalize(original);
-
-    if (!text) return original;
-
-    /*
-      Common speech-recognition variations.
-    */
-
-    let corrected = original
-      .replace(/\bwhat is the time now\b/i, "time")
-      .replace(/\bwhat's the time\b/i, "time")
-      .replace(/\bshow me the time\b/i, "time")
-      .replace(/\btell me time\b/i, "time")
-      .replace(/\bcurrent time please\b/i, "time")
-      .replace(/\bweather now\b/i, "weather")
-      .replace(/\btell weather\b/i, "weather");
-
-
-    /*
-      Telugu-English command corrections.
-    */
-
-    const lower = normalize(corrected);
-
     if (
-      lower === "time cheppu" ||
-      lower === "time chepu" ||
-      lower === "time chupu"
+      /^stop\s+speaking$/i.test(message)
     ) {
-      corrected = "time";
-    }
+      try {
+        speechSynthesis.cancel();
+      } catch (error) {}
 
-    if (
-      lower === "weather cheppu" ||
-      lower === "weather chepu"
-    ) {
-      corrected = "weather";
-    }
-
-    if (
-      lower.includes("joke cheppu") ||
-      lower.includes("joke chepu")
-    ) {
-      corrected = "tell me a joke";
-    }
-
-    if (
-      lower.includes("quote cheppu") ||
-      lower.includes("quote chepu")
-    ) {
-      corrected = "give me a quote";
-    }
-
-    if (
-      lower.includes("password generate") ||
-      lower.includes("password ivvu")
-    ) {
-      corrected = "generate password 16";
-    }
-
-
-    return corrected;
-  }
-
-
-  /* =========================================================
-     OPTIONAL AI BACKEND
-     ========================================================= */
-
-  async function callAIBackend(userText) {
-    if (!CONFIG.AI_API_URL) {
-      return null;
-    }
-
-    try {
-      const response = await fetch(
-        CONFIG.AI_API_URL,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-
-            ...(CONFIG.AI_API_KEY
-              ? {
-                  "Authorization":
-                    `Bearer ${CONFIG.AI_API_KEY}`
-                }
-              : {})
-          },
-
-          body: JSON.stringify({
-            message: userText,
-
-            history:
-              state.history.slice(-20),
-
-            memory:
-              state.memory.slice(-20),
-
-            tools: [
-              "time",
-              "weather",
-              "timer",
-              "dice",
-              "joke",
-              "quote",
-              "news",
-              "translate",
-              "currency",
-              "meaning",
-              "password",
-              "search",
-              "open",
-              "play",
-              "crypto",
-              "memory"
-            ]
-          })
-        }
+      addSystem(
+        "Voice stopped, Boss."
       );
 
-      if (!response.ok) {
-        throw new Error(
-          `AI backend HTTP ${response.status}`
+      requestInProgress = false;
+      return;
+    }
+
+    if (
+      /^(?:set|change)\s+(?:gemini\s+)?api\s*key$/i.test(message)
+    ) {
+      const key =
+        window.prompt(
+          "Enter your Gemini API Key:"
+        );
+
+      if (key && key.trim()) {
+        API_KEY =
+          key.trim();
+
+        localStorage.setItem(
+          "jarvis_key",
+          API_KEY
+        );
+
+        addSystem(
+          "Gemini API key saved, Boss."
+        );
+      } else {
+        addSystem(
+          "API key was not changed."
         );
       }
 
-      const data =
-        await response.json();
+      requestInProgress = false;
+      return;
+    }
 
-      return (
-        data.reply ||
-        data.message ||
-        data.output ||
-        null
+    /*
+      Local tools first.
+      This makes time/timer/dice etc. fast
+      without waiting for Gemini.
+    */
+
+    try {
+      const toolResult =
+        await handleTools(message);
+
+      if (toolResult !== null) {
+        add(
+          toolResult,
+          "ai"
+        );
+
+        /*
+          Don't save generated passwords.
+        */
+        if (
+          !/generated password:/i.test(
+            toolResult
+          )
+        ) {
+          MEMORY.push({
+            role: "user",
+            text: message
+          });
+
+          MEMORY.push({
+            role: "model",
+            text: toolResult
+          });
+
+          saveMemory();
+        }
+
+        /*
+          TTS only when explicitly requested.
+        */
+        if (
+          /\b(read|speak|say)\b/i.test(
+            message
+          )
+        ) {
+          speak(toolResult);
+        }
+
+        requestInProgress = false;
+        return;
+      }
+    } catch (error) {
+      console.warn(
+        "Tool error:",
+        error
       );
+    }
+
+    /*
+      Agent mode.
+    */
+
+    if (
+      isAgentModeRequest(message)
+    ) {
+      try {
+        const result =
+          await runAgent(message);
+
+        add(
+          result,
+          "ai"
+        );
+
+        MEMORY.push({
+          role: "user",
+          text: message
+        });
+
+        MEMORY.push({
+          role: "model",
+          text: result
+        });
+
+        saveMemory();
+
+      } catch (error) {
+        add(
+          `Agent error: ${error.message || error}`,
+          "ai"
+        );
+      }
+
+      requestInProgress = false;
+      return;
+    }
+
+    /*
+      Normal Gemini chat.
+    */
+
+    try {
+      const result =
+        await callGemini(
+          message
+        );
+
+      add(
+        result,
+        "ai"
+      );
+
+      MEMORY.push({
+        role: "user",
+        text: message
+      });
+
+      /*
+        Don't store obvious password responses.
+      */
+      if (
+        !/password\s*:/i.test(result)
+      ) {
+        MEMORY.push({
+          role: "model",
+          text: result
+        });
+      }
+
+      saveMemory();
+
+      /*
+        Read response only when user asks.
+      */
+      if (
+        /\b(?:speak|read|say)\s+(?:that|this|it|answer|response)\b/i.test(
+          message
+        )
+      ) {
+        speak(result);
+      }
 
     } catch (error) {
       console.error(
-        "AI backend error:",
+        "Gemini error:",
         error
       );
 
-      return null;
-    }
-  }
-
-
-  /* =========================================================
-     KEYBOARD SHORTCUTS
-     ========================================================= */
-
-  document.addEventListener(
-    "keydown",
-    event => {
-
-      /*
-       Ctrl + K
-       Focus command box.
-      */
+      const errorText =
+        String(
+          error?.message || error
+        );
 
       if (
-        event.ctrlKey &&
-        event.key.toLowerCase() === "k"
+        /API key|api_key|invalid.*key/i.test(
+          errorText
+        )
       ) {
-        event.preventDefault();
-
-        msg.focus();
-        msg.select();
+        add(
+          "Gemini API key is invalid or missing. Use 'set api key' to change it.",
+          "ai"
+        );
+      } else {
+        add(
+          `Sorry Boss, Gemini request failed: ${errorText}`,
+          "ai"
+        );
       }
+    }
 
+    requestInProgress = false;
+  }
 
-      /*
-       Escape
-       Stop speech.
-      */
+  /* =========================================================
+     30. SEND BUTTON
+     ========================================================= */
 
-      if (event.key === "Escape") {
-        try {
-          window.speechSynthesis.cancel();
-        } catch {}
+  function sendCurrentMessage() {
+    if (!input) {
+      return;
+    }
 
+    const text =
+      input.value.trim();
+
+    if (!text) {
+      return;
+    }
+
+    processMessage(text);
+  }
+
+  if (sendBtn) {
+    sendBtn.addEventListener(
+      "click",
+      sendCurrentMessage
+    );
+  }
+
+  /* =========================================================
+     31. INPUT ENTER KEY
+     ========================================================= */
+
+  if (input) {
+    input.addEventListener(
+      "keydown",
+      event => {
+        /*
+          Enter = send
+          Shift + Enter = new line
+        */
         if (
-          state.listening &&
-          state.recognition
+          event.key === "Enter" &&
+          !event.shiftKey
         ) {
-          try {
-            state.recognition.stop();
-          } catch {}
+          event.preventDefault();
+          sendCurrentMessage();
         }
       }
-    }
-  );
-
-
-  /* =========================================================
-     VOICE LOADING
-     ========================================================= */
-
-  if ("speechSynthesis" in window) {
-    speechSynthesis.onvoiceschanged = () => {
-      speechSynthesis.getVoices();
-    };
-  }
-
-
-  /* =========================================================
-     NOTIFICATION PERMISSION
-     ========================================================= */
-
-  function requestNotificationPermission() {
-    if (
-      "Notification" in window &&
-      Notification.permission === "default"
-    ) {
-      Notification.requestPermission().catch(() => {});
-    }
-  }
-
-
-  /* =========================================================
-     AGENT HEARTBEAT
-     ========================================================= */
-
-  setInterval(() => {
-    /*
-      Keeps the agent state alive and can be expanded later
-      for background jobs.
-    */
-
-    if (!state.busy) {
-      status("SYSTEM READY");
-    }
-  }, 5000);
-
-
-  /* =========================================================
-     START
-     ========================================================= */
-
-  requestNotificationPermission();
-
-  init();
-
-})();
-  /* =========================================================
-     J.A.R.V.I.S. - PART 3
-     AUTONOMOUS AGENT / GOAL PLANNER / LIVE CLOCK
-     
-     INSERT THIS SECTION BEFORE:
-     
-     requestNotificationPermission();
-     init();
-     
-     AND KEEP THE FINAL:
-     
-     })();
-     ========================================================= */
-
-
-  /* =========================================================
-     LIVE AGENT CLOCK
-     ========================================================= */
-
-  function createAgentClock() {
-    let clock = document.getElementById(
-      "jarvis-live-clock"
-    );
-
-    if (!clock) {
-      clock = document.createElement("div");
-
-      clock.id = "jarvis-live-clock";
-
-      clock.style.cssText = [
-        "position:fixed",
-        "right:12px",
-        "top:12px",
-        "z-index:9999",
-        "padding:7px 11px",
-        "border:1px solid rgba(0,255,255,.35)",
-        "border-radius:10px",
-        "background:rgba(0,0,0,.55)",
-        "color:#00ffff",
-        "font-family:monospace",
-        "font-size:12px",
-        "letter-spacing:.5px",
-        "backdrop-filter:blur(8px)",
-        "pointer-events:none"
-      ].join(";");
-
-      document.body.appendChild(clock);
-    }
-
-    function updateClock() {
-      const d = new Date();
-
-      clock.textContent =
-        d.toLocaleDateString([], {
-          day: "2-digit",
-          month: "short",
-          year: "numeric"
-        }) +
-        " • " +
-        d.toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        });
-    }
-
-    updateClock();
-
-    setInterval(updateClock, 1000);
-  }
-
-
-  /* =========================================================
-     AGENT ACTIVITY PANEL
-     ========================================================= */
-
-  function createAgentActivity() {
-    let panel =
-      document.getElementById(
-        "jarvis-agent-activity"
-      );
-
-    if (panel) return panel;
-
-    panel = document.createElement("div");
-
-    panel.id = "jarvis-agent-activity";
-
-    panel.style.cssText = [
-      "position:fixed",
-      "left:12px",
-      "bottom:12px",
-      "z-index:9998",
-      "max-width:280px",
-      "padding:9px 12px",
-      "border:1px solid rgba(0,255,255,.25)",
-      "border-radius:10px",
-      "background:rgba(0,0,0,.55)",
-      "color:#bfffff",
-      "font:11px monospace",
-      "backdrop-filter:blur(8px)",
-      "pointer-events:none",
-      "opacity:.85"
-    ].join(";");
-
-    panel.textContent =
-      "J.A.R.V.I.S. AGENT: READY";
-
-    document.body.appendChild(panel);
-
-    return panel;
-  }
-
-
-  function agentActivity(text) {
-    const panel =
-      document.getElementById(
-        "jarvis-agent-activity"
-      );
-
-    if (panel) {
-      panel.textContent =
-        "J.A.R.V.I.S. AGENT: " + text;
-    }
-
-    status(text);
-  }
-
-
-  /* =========================================================
-     SMART GOAL ANALYZER
-     ========================================================= */
-
-  function buildSmartPlan(goal) {
-    const text = normalize(goal);
-
-    const steps = [];
-
-    /*
-      TIME + WEATHER
-    */
-
-    if (
-      text.includes("time") &&
-      (
-        text.includes("weather") ||
-        text.includes("temperature")
-      )
-    ) {
-      steps.push({
-        tool: "time",
-        args: {}
-      });
-
-      steps.push({
-        tool: "weather",
-        args: extractLocation(goal)
-      });
-
-      return steps;
-    }
-
-
-    /*
-      WEATHER + NEWS
-    */
-
-    if (
-      text.includes("weather") &&
-      text.includes("news")
-    ) {
-      steps.push({
-        tool: "weather",
-        args: extractLocation(goal)
-      });
-
-      steps.push({
-        tool: "news",
-        args: {}
-      });
-
-      return steps;
-    }
-
-
-    /*
-      SEARCH + OPEN
-    */
-
-    if (
-      (
-        text.includes("search") ||
-        text.includes("find") ||
-        text.includes("look up")
-      ) &&
-      text.includes("open")
-    ) {
-      const query =
-        extractAfterKeywords(
-          goal,
-          [
-            "search",
-            "search for",
-            "find",
-            "look up"
-          ]
-        );
-
-      steps.push({
-        tool: "search",
-        args: {
-          query
-        }
-      });
-
-      return steps;
-    }
-
-
-    /*
-      TRANSLATE + SPEAK
-    */
-
-    if (
-      text.includes("translate") &&
-      (
-        text.includes("speak") ||
-        text.includes("say")
-      )
-    ) {
-      const translation =
-        extractTranslation(goal);
-
-      steps.push({
-        tool: "translate",
-        args: translation
-      });
-
-      return steps;
-    }
-
-
-    /*
-      RANDOM FUN
-    */
-
-    if (
-      text.includes("joke") &&
-      text.includes("quote")
-    ) {
-      steps.push({
-        tool: "joke",
-        args: {}
-      });
-
-      steps.push({
-        tool: "quote",
-        args: {}
-      });
-
-      return steps;
-    }
-
-
-    /*
-      PASSWORD + MEMORY
-    */
-
-    if (
-      text.includes("generate") &&
-      text.includes("password") &&
-      text.includes("remember")
-    ) {
-      steps.push({
-        tool: "password",
-        args: {
-          length: extractNumber(goal) || 16
-        }
-      });
-
-      return steps;
-    }
-
-
-    /*
-      OPEN + PLAY
-    */
-
-    if (
-      text.includes("open") &&
-      text.includes("youtube")
-    ) {
-      steps.push({
-        tool: "open",
-        args: {
-          target: "youtube"
-        }
-      });
-
-      return steps;
-    }
-
-
-    /*
-      CRYPTO + CURRENCY
-    */
-
-    if (
-      (
-        text.includes("bitcoin") ||
-        text.includes("ethereum") ||
-        text.includes("crypto")
-      ) &&
-      (
-        text.includes("inr") ||
-        text.includes("rupees") ||
-        text.includes("rupee")
-      )
-    ) {
-      steps.push({
-        tool: "crypto",
-        args: {
-          coin: detectCoin(goal)
-        }
-      });
-
-      return steps;
-    }
-
-
-    return [];
-  }
-
-
-  /* =========================================================
-     SMART COMMAND RECOGNITION
-     ========================================================= */
-
-  function smartCommand(goal) {
-    const text = normalize(goal);
-
-    /*
-      Natural language -> standard command
-    */
-
-    if (
-      text.includes("tell me current time") ||
-      text.includes("tell me the current time") ||
-      text.includes("what's current time") ||
-      text.includes("what is current time")
-    ) {
-      return "time";
-    }
-
-
-    if (
-      text.includes("how is the weather") ||
-      text.includes("how's the weather") ||
-      text.includes("what is weather")
-    ) {
-      return "weather";
-    }
-
-
-    if (
-      text.includes("give me today's news") ||
-      text.includes("show today's news") ||
-      text.includes("latest news")
-    ) {
-      return "news";
-    }
-
-
-    if (
-      text.includes("flip a coin") ||
-      text.includes("flip coin")
-    ) {
-      return "flip coin";
-    }
-
-
-    if (
-      text.includes("roll a dice") ||
-      text.includes("roll the dice")
-    ) {
-      return "roll dice";
-    }
-
-
-    /*
-      Telugu-English common commands
-    */
-
-    if (
-      text === "time cheppu" ||
-      text === "time chepu" ||
-      text === "time chupu" ||
-      text === "ippudu time entha"
-    ) {
-      return "time";
-    }
-
-
-    if (
-      text === "weather cheppu" ||
-      text === "weather chepu" ||
-      text === "weather chupu"
-    ) {
-      return "weather";
-    }
-
-
-    if (
-      text.includes("joke cheppu") ||
-      text.includes("joke chepu")
-    ) {
-      return "tell me a joke";
-    }
-
-
-    if (
-      text.includes("quote cheppu") ||
-      text.includes("quote chepu")
-    ) {
-      return "give me a quote";
-    }
-
-
-    if (
-      text.includes("password ivvu") ||
-      text.includes("password create cheyyi")
-    ) {
-      return "generate password 16";
-    }
-
-
-    return goal;
-  }
-
-
-  /* =========================================================
-     ENHANCED AGENT
-     ========================================================= */
-
-  const originalRunAgent =
-    runAgent;
-
-  runAgent = async function(goal) {
-
-    let currentGoal =
-      smartCommand(goal);
-
-    /*
-      If command was corrected,
-      tell the agent activity system.
-    */
-
-    if (
-      normalize(currentGoal) !==
-      normalize(goal)
-    ) {
-      agentActivity(
-        "COMMAND CORRECTED"
-      );
-
-      await sleep(120);
-    }
-
-
-    /*
-      Build an autonomous multi-step plan.
-    */
-
-    const smartSteps =
-      buildSmartPlan(currentGoal);
-
-
-    if (smartSteps.length) {
-
-      state.currentPlan = {
-        goal: currentGoal,
-        steps: smartSteps,
-        mode: "autonomous"
-      };
-
-
-      const results = [];
-
-
-      for (
-        let i = 0;
-        i < smartSteps.length;
-        i++
-      ) {
-
-        const step =
-          smartSteps[i];
-
-
-        agentActivity(
-          `PLAN ${i + 1}/${smartSteps.length}: ${step.tool.toUpperCase()}`
-        );
-
-
-        try {
-
-          const result =
-            await executeTool(
-              step.tool,
-              step.args || {}
-            );
-
-
-          results.push({
-            tool: step.tool,
-            result
-          });
-
-
-        } catch (error) {
-
-          results.push({
-            tool: step.tool,
-
-            result:
-              `Failed: ${error.message}`
-          });
-
-        }
-
-
-        await sleep(100);
-      }
-
-
-      agentActivity(
-        "PLAN COMPLETE"
-      );
-
-
-      return results
-        .map(
-          (item, index) =>
-            `${index + 1}. ${item.result}`
-        )
-        .join("\n\n");
-    }
-
-
-    /*
-      Fall back to the original agent.
-    */
-
-    agentActivity(
-      "ANALYZING GOAL"
-    );
-
-
-    const result =
-      await originalRunAgent(
-        currentGoal
-      );
-
-
-    agentActivity(
-      "TASK COMPLETE"
-    );
-
-
-    return result;
-  };
-
-
-  /* =========================================================
-     ADVANCED TIMER PARSER
-     ========================================================= */
-
-  function parseNaturalTimer(text) {
-    const input =
-      normalize(text);
-
-    let seconds = 0;
-
-    const hour =
-      input.match(
-        /(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)/
-      );
-
-    const minute =
-      input.match(
-        /(\d+(?:\.\d+)?)\s*(?:minute|minutes|min|mins)/
-      );
-
-    const second =
-      input.match(
-        /(\d+(?:\.\d+)?)\s*(?:second|seconds|sec|secs)/
-      );
-
-
-    if (hour) {
-      seconds +=
-        Number(hour[1]) * 3600;
-    }
-
-    if (minute) {
-      seconds +=
-        Number(minute[1]) * 60;
-    }
-
-    if (second) {
-      seconds +=
-        Number(second[1]);
-    }
-
-
-    return seconds;
-  }
-
-
-  /*
-    Improve timer recognition.
-  */
-
-  const originalExecuteTool =
-    executeTool;
-
-
-  executeTool = async function(
-    tool,
-    args
-  ) {
-
-    if (
-      tool === "timer" &&
-      (!args ||
-       !Number(args.seconds))
-    ) {
-      args = {
-        seconds: 60
-      };
-    }
-
-
-    return await originalExecuteTool(
-      tool,
-      args
-    );
-  };
-
-
-  /* =========================================================
-     AGENT GOAL STATUS
-     ========================================================= */
-
-  function showPlan(plan) {
-    if (
-      !plan ||
-      !plan.steps ||
-      !plan.steps.length
-    ) {
-      return;
-    }
-
-    const planText =
-      plan.steps
-        .map(
-          (step, index) =>
-            `${index + 1}. ${step.tool}`
-        )
-        .join(" → ");
-
-
-    agentActivity(
-      `PLAN: ${planText}`
     );
   }
 
-
   /* =========================================================
-     INTERCEPT PLAN CREATION
+     32. MIC BUTTON
      ========================================================= */
 
-  const originalCreatePlan =
-    createPlan;
-
-
-  createPlan = function(goal) {
-
-    const plan =
-      originalCreatePlan(goal);
-
-
-    if (plan) {
-      showPlan(plan);
-    }
-
-
-    return plan;
-  };
-
-
-  /* =========================================================
-     IMAGE -> AI BACKEND HOOK
-     
-     If CONFIG.AI_API_URL is configured,
-     the selected image can be sent to your backend.
-     ========================================================= */
-
-  const originalAnalyzeImage =
-    analyzeImage;
-
-
-  analyzeImage = async function(
-    file,
-    dataURL
-  ) {
-
-    /*
-      Always perform local analysis first.
-    */
-
-    await originalAnalyzeImage(
-      file,
-      dataURL
+  if (micBtn) {
+    micBtn.addEventListener(
+      "click",
+      toggleVoiceInput
     );
-
-
-    /*
-      If no AI backend exists,
-      browser analysis is the final result.
-    */
-
-    if (!CONFIG.AI_API_URL) {
-      return;
-    }
-
-
-    try {
-
-      agentActivity(
-        "SENDING IMAGE TO VISION AI"
-      );
-
-
-      const response =
-        await fetch(
-          CONFIG.AI_API_URL,
-          {
-            method: "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              ...(CONFIG.AI_API_KEY
-                ? {
-                    "Authorization":
-                      `Bearer ${CONFIG.AI_API_KEY}`
-                  }
-                : {})
-            },
-
-            body: JSON.stringify({
-              type: "image_analysis",
-              image: dataURL,
-              filename: file.name
-            })
-          }
-        );
-
-
-      if (!response.ok) {
-        throw new Error(
-          `Vision backend HTTP ${response.status}`
-        );
-      }
-
-
-      const data =
-        await response.json();
-
-
-      const result =
-        data.reply ||
-        data.analysis ||
-        data.description ||
-        data.output;
-
-
-      if (result) {
-
-        addMessage(
-          "🤖 AI VISION RESULT\n\n" +
-          result,
-          "assistant"
-        );
-
-        speak(
-          "Vision analysis complete."
-        );
-      }
-
-
-    } catch (error) {
-
-      console.error(
-        "Vision AI:",
-        error
-      );
-
-
-      addMessage(
-        "Local image analysis completed, but the Vision AI backend could not be reached.",
-        "assistant"
-      );
-
-    } finally {
-
-      agentActivity(
-        "IMAGE TASK COMPLETE"
-      );
-    }
-  };
-
+  }
 
   /* =========================================================
-     QUICK COMMAND BUTTONS
-     
-     Existing HTML IDs remain unchanged.
+     33. CLEAR MEMORY BUTTON
      ========================================================= */
 
-  function addQuickCommands() {
-
-    const existing =
-      document.getElementById(
-        "jarvis-quick-commands"
-      );
-
-    if (existing) return;
-
-
-    const area =
-      document.querySelector(
-        ".input-area"
-      );
-
-    if (!area) return;
-
-
-    const container =
-      document.createElement("div");
-
-
-    container.id =
-      "jarvis-quick-commands";
-
-
-    container.style.cssText = [
-      "display:flex",
-      "flex-wrap:wrap",
-      "gap:6px",
-      "margin-top:8px"
-    ].join(";");
-
-
-    const commands = [
-      ["TIME", "time"],
-      ["WEATHER", "weather"],
-      ["JOKE", "tell me a joke"],
-      ["QUOTE", "give me a quote"],
-      ["NEWS", "news"],
-      ["DICE", "roll dice"],
-      ["COIN", "flip coin"],
-      ["PASSWORD", "generate password 16"],
-      ["HELP", "help"]
-    ];
-
-
-    commands.forEach(
-      ([label, command]) => {
-
-        const button =
-          document.createElement(
-            "button"
+  if (clearBtn) {
+    clearBtn.addEventListener(
+      "click",
+      () => {
+        const confirmed =
+          window.confirm(
+            "Clear J.A.R.V.I.S. memory?"
           );
 
+        if (!confirmed) {
+          return;
+        }
 
-        button.type = "button";
+        clearMemory();
 
-        button.textContent =
-          label;
+        if (chat) {
+          chat.innerHTML = "";
+        }
 
-
-        button.style.cssText = [
-          "cursor:pointer",
-          "padding:5px 9px",
-          "border-radius:7px",
-          "background:transparent",
-          "border:1px solid rgba(0,255,255,.3)",
-          "color:inherit",
-          "font-size:11px"
-        ].join(";");
-
-
-        button.addEventListener(
-          "click",
-          () => {
-
-            msg.value =
-              command;
-
-            msg.focus();
-
-            executeInput();
-          }
-        );
-
-
-        container.appendChild(
-          button
+        addSystem(
+          "Memory cleared, Boss."
         );
       }
-    );
-
-
-    area.appendChild(
-      container
     );
   }
 
-
   /* =========================================================
-     AGENT ERROR RECOVERY
+     34. CAMERA / IMAGE BUTTON
      ========================================================= */
 
-  window.addEventListener(
-    "unhandledrejection",
-    event => {
-
-      console.warn(
-        "JARVIS recovered rejected promise:",
-        event.reason
-      );
-
-
-      if (!state.busy) {
-        status(
-          "SYSTEM READY"
-        );
-      }
+  function openImagePicker() {
+    if (imgInput) {
+      imgInput.click();
+      return;
     }
-  );
 
+    /*
+      Fallback if HTML doesn't contain img-input.
+    */
+    const temporaryInput =
+      document.createElement("input");
 
-  window.addEventListener(
-    "error",
-    event => {
+    temporaryInput.type = "file";
+    temporaryInput.accept =
+      "image/*";
 
-      console.warn(
-        "JARVIS runtime recovery:",
-        event.error
-      );
+    temporaryInput.style.display =
+      "none";
 
-
-      if (!state.busy) {
-        status(
-          "SYSTEM READY"
-        );
-      }
-    }
-  );
-
-
-  /* =========================================================
-     START AGENT UI
-     ========================================================= */
-
-  createAgentClock();
-
-  createAgentActivity();
-
-  addQuickCommands();
-
-
-  /* =========================================================
-     FINAL AGENT READY MESSAGE
-     ========================================================= */
-
-  setTimeout(() => {
-
-    agentActivity(
-      "READY • GOAL → PLAN → TOOLS → RESULT"
+    document.body.appendChild(
+      temporaryInput
     );
 
-  }, 500);
+    temporaryInput.addEventListener(
+      "change",
+      () => {
+        const file =
+          temporaryInput.files?.[0];
+
+        if (file) {
+          analyzeImage(file);
+        }
+
+        temporaryInput.remove();
+      },
+      { once: true }
+    );
+
+    temporaryInput.click();
+  }
+
+  if (camBtn) {
+    camBtn.addEventListener(
+      "click",
+      openImagePicker
+    );
+  }
+
+  if (imgInput) {
+    imgInput.addEventListener(
+      "change",
+      event => {
+        const file =
+          event.target.files?.[0];
+
+        if (file) {
+          analyzeImage(file);
+        }
+
+        /*
+          Allows selecting the same image again.
+        */
+        event.target.value = "";
+      }
+    );
+  }
+
+  /* =========================================================
+     35. SPEAK BUTTON
+     ========================================================= */
+
+  if (speakBtn) {
+    speakBtn.addEventListener(
+      "click",
+      () => {
+        const lastModel =
+          [...MEMORY]
+            .reverse()
+            .find(
+              item =>
+                item.role === "model"
+            );
+
+        if (!lastModel) {
+          addSystem(
+            "There is no answer to speak yet, Boss."
+          );
+          return;
+        }
+
+        speak(lastModel.text);
+      }
+    );
+  }
+
+  /* =========================================================
+     36. STOP BUTTON
+     ========================================================= */
+
+  if (stopBtn) {
+    stopBtn.addEventListener(
+      "click",
+      () => {
+        try {
+          speechSynthesis.cancel();
+        } catch (error) {}
+
+        if (activeTimer) {
+          clearTimeout(
+            activeTimer
+          );
+
+          activeTimer = null;
+        }
+
+        addSystem(
+          "Stopped, Boss."
+        );
+      }
+    );
+  }
+
+  /* =========================================================
+     37. OPTIONAL GLOBAL FUNCTIONS
+     ========================================================= */
+
+  window.JARVIS = Object.freeze({
+    send: processMessage,
+    speak,
+    clearMemory,
+    getTime: getCurrentTime,
+    getDate: getCurrentDate,
+    weather: getWeather,
+    crypto: getCrypto,
+    joke: getJoke,
+    quote: getQuote,
+    rollDice,
+    flipCoin,
+    generatePassword,
+    openApp,
+    googleSearch,
+    youtubeSearch,
+    startTimer
+  });
+
+  /* =========================================================
+     38. STARTUP
+     ========================================================= */
+
+  /*
+    Render saved conversation if chat exists.
+  */
+  if (
+    chat &&
+    MEMORY.length > 0
+  ) {
+    renderMemory();
+  }
+
+  /*
+    Browser notification permission is requested
+    only when the user starts a timer.
+  */
+  const originalStartTimer =
+    startTimer;
+
+  /*
+    Welcome only when there is no previous memory.
+  */
+  if (
+    chat &&
+    MEMORY.length === 0
+  ) {
+    add(
+      "J.A.R.V.I.S. online. How can I help you, Boss?",
+      "ai"
+    );
+  }
+
+  console.log(
+    "%cJ.A.R.V.I.S. ONLINE",
+    "font-weight:bold;font-size:18px"
+  );
+
+})();
