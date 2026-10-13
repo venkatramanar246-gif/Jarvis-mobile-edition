@@ -1,4 +1,4 @@
-// ===== 1. API KEY =====
+ // ===== 1. API KEY =====
 let API_KEY = localStorage.getItem('jarvis_key');
 if (!API_KEY) {
   API_KEY = prompt('Enter your Gemini API Key:');
